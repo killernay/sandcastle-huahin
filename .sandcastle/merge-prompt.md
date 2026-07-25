@@ -13,6 +13,8 @@ For each branch:
 
 After all branches are merged, make a single commit summarizing the merge.
 
+{{DEP_UPDATE_BLOCK}}
+
 # CLOSE ISSUES
 
 For each branch that was merged, close its issue using the following command:

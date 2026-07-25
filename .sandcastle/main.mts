@@ -413,6 +413,19 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
       // A markdown list of issue IDs and titles, one per line.
       ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
+      // Tell the merger to write completed stories back to the dep-order file so
+      // the next planning round doesn't treat finished work as pending. Only when
+      // a DEP_ORDER_FILE is configured — otherwise there's nothing to update.
+      DEP_UPDATE_BLOCK: DEP_ORDER_FILE
+        ? `# UPDATE DEPENDENCY STATUS\n\n` +
+          `The planner reads \`${DEP_ORDER_FILE}\` to know which stories are done. ` +
+          `If you don't update it, the next planning round will think finished ` +
+          `stories are still pending and stall.\n\n` +
+          `For every story you just merged, find its entry in that file and mark ` +
+          `it done (match by the \`<epic>-<story>\` number from the issue title). ` +
+          `Do NOT touch entries marked BLOCKED or DEFERRED. Include this edit in ` +
+          `the same merge commit.`
+        : "",
     },
   });
 
