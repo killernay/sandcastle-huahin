@@ -59,6 +59,53 @@ tail -f .sandcastle/run.log
 
 See `.sandcastle/MODELS.md` for the full routing guide.
 
+## Pairs with BMAD (Matt Pocock's planning skills)
+
+This harness is the **execution half**. The natural upstream is the **BMAD
+Method** skills — the same ecosystem [Matt Pocock](https://github.com/mattpocock)
+builds around Sandcastle. BMAD turns an idea into an ordered, agent-ready backlog;
+sandcastle-huahin drains that backlog.
+
+```
+  ┌─────────────────────── BMAD (planning) ────────────────────────┐
+  bmad-create-prd → bmad-create-epics-and-stories → bmad-sprint-planning
+        │                                                    │
+        ▼                                                    ▼
+   PRD + epics                                    sprint-status.yaml
+   as GitHub issues  ──────────┐        ┌──────── (dependency order)
+   (labelled ready-for-agent)  │        │
+                               ▼        ▼
+  └────────────── sandcastle-huahin (execution) ──────────────────┘
+     planner reads {{ISSUE_LABEL}} issues + DEP_ORDER_FILE
+       → implementer → reviewer → merger → closes issues → re-plans
+```
+
+**How they connect — two config values:**
+
+| BMAD produces | sandcastle-huahin reads via |
+| --- | --- |
+| GitHub issues labelled for the agent | `ISSUE_LABEL=ready-for-agent` |
+| `_bmad-output/…/sprint-status.yaml` (build order) | `DEP_ORDER_FILE=…/sprint-status.yaml` |
+
+So the typical full pipeline is:
+
+1. **Plan with BMAD skills** (in your editor / Claude Code): `bmad-create-prd`
+   → `bmad-create-epics-and-stories` → `bmad-sprint-planning`. This writes your
+   epics/stories as GitHub issues and a `sprint-status.yaml` dependency order.
+2. **Execute with this harness**: point `DEP_ORDER_FILE` at that yaml, set
+   `ISSUE_LABEL` to your agent label, and run — the planner respects BMAD's
+   epic/story order and only picks unblocked work.
+
+**You don't need BMAD.** If you skip it, leave `DEP_ORDER_FILE` empty — the
+planner then orders purely by each issue's body, labels, and stated
+dependencies. BMAD just gives it a stronger, authoritative build order.
+
+> Note: BMAD writes back to `sprint-status.yaml` during planning, but the
+> execution loop's merger does **not** currently update it — so after a run,
+> re-sync the yaml's `done` markers from `git log` (or re-run the relevant BMAD
+> status step) before the next planning pass, or the planner may think finished
+> stories are still pending.
+
 ## How the loop works
 
 ```
