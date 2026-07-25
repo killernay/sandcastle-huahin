@@ -95,18 +95,19 @@ const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
 
 // ── Project layout (parametrized so this harness drops into any repo) ────────
 // WORKSPACE_DIR: subdirectory holding the pnpm/package.json workspace, relative
-// to repo root. Empty = the workspace IS the repo root. TendOps uses "tendops".
+// to repo root. Empty = the workspace IS the repo root. e.g. a monorepo
+// might set "apps/web".
 // Set in .sandcastle/.env per project.
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR ?? "";
 // Shell prefix to enter the workspace ("" when it's the root, else "cd <dir> && ").
 const CD_WS = WORKSPACE_DIR ? `cd ${WORKSPACE_DIR} && ` : "";
 
 // GitHub label the planner filters open issues by (your "ready for the agent"
-// signal). TendOps uses "ready-for-agent".
+// signal). Defaults to "ready-for-agent".
 const ISSUE_LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
-// Optional file holding the authoritative dependency/build order (e.g. a BMAD
-// sprint-status.yaml). Empty = no such file; the planner then orders by issue
-// body/labels alone. TendOps: "_bmad-output/implementation-artifacts/sprint-status.yaml".
+// Optional file holding the authoritative dependency/build order (e.g. a
+// sprint-status.yaml or roadmap doc). Empty = no such file; the planner then
+// orders by issue body/labels alone.
 const DEP_ORDER_FILE = process.env.DEP_ORDER_FILE ?? "";
 
 // Models preflight found live on 9router (set by preflightModels()). Used to
