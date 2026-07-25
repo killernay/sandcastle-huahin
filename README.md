@@ -24,7 +24,9 @@ it's the *harness* (the `main.mts` loop + prompts you customise), wired for:
 ## Quick start (new project)
 
 ```bash
-# 1. Drop the harness into your repo
+# 1. Drop the harness into your repo.
+#    `killernay/sandcastle-huahin/.sandcastle` is the SOURCE (this repo) — keep it
+#    exactly. The trailing `.sandcastle` is the DESTINATION inside YOUR project.
 cd your-project
 npx degit killernay/sandcastle-huahin/.sandcastle .sandcastle
 
@@ -51,7 +53,7 @@ tail -f .sandcastle/run.log
 | --- | --- | --- |
 | `WORKSPACE_DIR` | Subdir with the pnpm workspace (empty = repo root) | `` |
 | `ISSUE_LABEL` | GitHub label the planner filters by | `ready-for-agent` |
-| `DEP_ORDER_FILE` | Optional build-order file (e.g. BMAD sprint-status.yaml) | `` |
+| `DEP_ORDER_FILE` | Optional build-order file (e.g. a sprint-status.yaml / roadmap) | `` |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
 | `MODEL_PLAN/REVIEW/MERGE` | Reasoning + QC models | `cc/claude-opus-4-8` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |
@@ -59,52 +61,47 @@ tail -f .sandcastle/run.log
 
 See `.sandcastle/MODELS.md` for the full routing guide.
 
-## Pairs with BMAD (Matt Pocock's planning skills)
+## Pairs with [mattpocock/skills](https://github.com/mattpocock/skills)
 
-This harness is the **execution half**. The natural upstream is the **BMAD
-Method** skills — the same ecosystem [Matt Pocock](https://github.com/mattpocock)
-builds around Sandcastle. BMAD turns an idea into an ordered, agent-ready backlog;
-sandcastle-huahin drains that backlog.
+This harness is the **execution half**. It's built to sit downstream of
+[Matt Pocock's skills](https://github.com/mattpocock/skills) — small, composable
+agent skills for real engineering (planning, triage, PRDs, tickets) that work
+with any model. Those skills turn an idea into a **labelled GitHub-issue backlog**;
+sandcastle-huahin drains that backlog autonomously.
 
 ```
-  ┌─────────────────────── BMAD (planning) ────────────────────────┐
-  bmad-create-prd → bmad-create-epics-and-stories → bmad-sprint-planning
-        │                                                    │
-        ▼                                                    ▼
-   PRD + epics                                    sprint-status.yaml
-   as GitHub issues  ──────────┐        ┌──────── (dependency order)
-   (labelled ready-for-agent)  │        │
-                               ▼        ▼
-  └────────────── sandcastle-huahin (execution) ──────────────────┘
-     planner reads {{ISSUE_LABEL}} issues + DEP_ORDER_FILE
+  ┌──────────── mattpocock/skills (planning, in your agent) ───────────┐
+   idea → PRD → tickets → /triage (applies your agent label to issues)
+                                          │
+                                          ▼
+                          GitHub issues labelled ready-for-agent
+                                          │
+  └──────────────── sandcastle-huahin (execution loop) ───────────────┘
+     planner reads {{ISSUE_LABEL}} issues → picks ≤3, tags small/large
        → implementer → reviewer → merger → closes issues → re-plans
 ```
 
-**How they connect — two config values:**
+Install Matt's skills and run setup (from their README):
 
-| BMAD produces | sandcastle-huahin reads via |
-| --- | --- |
-| GitHub issues labelled for the agent | `ISSUE_LABEL=ready-for-agent` |
-| `_bmad-output/…/sprint-status.yaml` (build order) | `DEP_ORDER_FILE=…/sprint-status.yaml` |
+```bash
+npx skills@latest add mattpocock/skills
+# then in your agent: /setup-matt-pocock-skills
+#   → choose GitHub as the issue tracker
+#   → choose the label /triage applies to ready tickets
+```
 
-So the typical full pipeline is:
+Whatever label you pick in `/triage`, put the same value in
+`.sandcastle/.env` as `ISSUE_LABEL`. That's the only wiring needed — the skills
+label the issues, this harness reads that label.
 
-1. **Plan with BMAD skills** (in your editor / Claude Code): `bmad-create-prd`
-   → `bmad-create-epics-and-stories` → `bmad-sprint-planning`. This writes your
-   epics/stories as GitHub issues and a `sprint-status.yaml` dependency order.
-2. **Execute with this harness**: point `DEP_ORDER_FILE` at that yaml, set
-   `ISSUE_LABEL` to your agent label, and run — the planner respects BMAD's
-   epic/story order and only picks unblocked work.
+**Dependency order is optional.** If your planning flow also emits a build-order
+file (a `sprint-status.yaml`, a roadmap doc, anything), point `DEP_ORDER_FILE`
+at it and the planner will respect that order. If not, leave it empty — the
+planner orders by each issue's body, labels, and stated dependencies alone.
 
-**You don't need BMAD.** If you skip it, leave `DEP_ORDER_FILE` empty — the
-planner then orders purely by each issue's body, labels, and stated
-dependencies. BMAD just gives it a stronger, authoritative build order.
-
-> Note: BMAD writes back to `sprint-status.yaml` during planning, but the
-> execution loop's merger does **not** currently update it — so after a run,
-> re-sync the yaml's `done` markers from `git log` (or re-run the relevant BMAD
-> status step) before the next planning pass, or the planner may think finished
-> stories are still pending.
+**You don't need Matt's skills either.** Any workflow that produces GitHub issues
+carrying a consistent label works. The skills just make the planning half
+pleasant.
 
 ## How the loop works
 
