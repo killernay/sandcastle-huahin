@@ -20,18 +20,47 @@ Here are the last 10 commits:
 
 # EXPLORATION
 
-Explore the repo and fill your context window with relevant information that will allow you to complete the task.
+Explore the repo and fill your context window with relevant information that will
+allow you to complete the task.
+
+Read `CONTEXT.md` if it exists so your test names and interface vocabulary match
+the project's domain language, and respect any ADRs in the area you're touching.
 
 Pay extra attention to test files that touch the relevant parts of the code.
 
-# EXECUTION
+# EXECUTION — test-driven (red → green)
 
-If applicable, use RGR to complete the task.
+Build the change test-first, in **vertical slices**: one test → just enough code
+to pass it → repeat. Each test is a tracer bullet that responds to what the last
+slice taught you. Do NOT write all the tests first (horizontal slicing) — that
+tests imagined behaviour and locks in structure before you understand it.
 
-1. RED: write one test
-2. GREEN: write the implementation to pass that test
-3. REPEAT until done
-4. REFACTOR the code
+**Pick the seams first.** A seam is the public boundary you observe behaviour at —
+an exported function, an HTTP route, a CLI command. Before writing a test, decide
+which seams you're testing at, and prefer the fewest, highest seams. Test *at*
+seams, never against internals. If the issue implies a new seam, choose the
+highest reasonable one.
+
+The loop, per slice:
+
+1. **RED** — write ONE failing test at a seam. It must fail for the right reason
+   (run it, see it red). Assert against an independent source of truth (a
+   known-good literal, a worked example, the spec) — never recompute the expected
+   value the way the code does.
+2. **GREEN** — write only enough implementation to make that one test pass.
+   No speculative features, no anticipating later tests.
+3. **REPEAT** — next slice, informed by what you just learned.
+
+Avoid these test anti-patterns:
+- **Implementation-coupled** — mocking internal collaborators, testing private
+  methods, or asserting via a side channel (querying the DB instead of the
+  interface). Tell: the test breaks on a refactor when behaviour didn't change.
+- **Tautological** — the assertion recomputes the expected value the same way the
+  code does, so it can never disagree with the code.
+- **Horizontal slicing** — all tests first, then all code.
+
+**Refactoring is NOT part of this loop.** Get to green with a working, tested
+slice. Broad cleanup/refactor happens in the review stage — don't gold-plate here.
 
 # FEEDBACK LOOPS
 

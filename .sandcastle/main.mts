@@ -339,6 +339,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             agent: agent(modelFor("REVIEW")),
             promptFile: "./.sandcastle/review-prompt.md",
             promptArgs: {
+              TASK_ID: issue.id,
               BRANCH: issue.branch,
             },
           });

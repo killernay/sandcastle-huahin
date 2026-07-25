@@ -1,10 +1,16 @@
 # TASK
 
-Review the code changes on branch `{{BRANCH}}` and improve code clarity, consistency, and maintainability while preserving exact functionality.
+Review the changes on branch `{{BRANCH}}` for issue {{TASK_ID}} along **two axes**
+— Spec (does it do what the issue asked?) and Standards (is it clean and correct?)
+— then apply refactors and fixes directly on the branch.
 
 # CONTEXT
 
-## Branch diff
+## The originating issue
+
+!`gh issue view {{TASK_ID}}`
+
+## Branch diff (three-dot, against merge-base)
 
 !`git diff {{TARGET_BRANCH}}...{{BRANCH}}`
 
@@ -12,44 +18,45 @@ Review the code changes on branch `{{BRANCH}}` and improve code clarity, consist
 
 !`git log {{TARGET_BRANCH}}..{{BRANCH}} --oneline`
 
-# REVIEW PROCESS
+# AXIS 1 — SPEC (does the code match what was asked?)
 
-1. **Understand the change**: Read the diff and commits above to understand the intent.
+Read the issue above (and any parent PRD it references). Check the diff against it:
 
-2. **Analyze for improvements**: Look for opportunities to:
-   - Reduce unnecessary complexity and nesting
-   - Eliminate redundant code and abstractions
-   - Improve readability through clear variable and function names
-   - Consolidate related logic
-   - Remove unnecessary comments that describe obvious code
-   - Avoid nested ternary operators - prefer switch statements or if/else chains
-   - Choose clarity over brevity - explicit code is often better than overly compact code
+- Is every acceptance criterion / requirement in the issue actually implemented?
+- Are the stated edge cases handled?
+- Did the implementer do **only** what the issue asked — no scope creep, no
+  unrelated changes?
+- Are the new/changed behaviours covered by tests **at a public seam** (not
+  coupled to internals, not tautological)? If a required behaviour has no test,
+  add one (red → green).
 
-3. **Check correctness**:
-   - Does the implementation match the intent? Are edge cases handled?
-   - Are new/changed behaviours covered by tests?
-   - Are there unsafe casts, `any` types, or unchecked assumptions?
-   - Does the change introduce injection vulnerabilities, credential leaks, or other security issues?
+If the code does NOT satisfy the issue, fix it — implement the missing behaviour
+test-first. This axis is about correctness-vs-intent, and it comes first: clean
+code that does the wrong thing is still wrong.
 
-4. **Maintain balance**: Avoid over-simplification that could:
-   - Reduce code clarity or maintainability
-   - Create overly clever solutions that are hard to understand
-   - Combine too many concerns into single functions or components
-   - Remove helpful abstractions that improve code organization
-   - Make the code harder to debug or extend
+# AXIS 2 — STANDARDS (is the code clean, safe, maintainable?)
 
-5. **Apply project standards**: Follow the coding standards defined in @.sandcastle/CODING_STANDARDS.md
+Follow the coding standards in @.sandcastle/CODING_STANDARDS.md. Look for:
 
-6. **Preserve functionality**: Never change what the code does - only how it does it. All original features, outputs, and behaviors must remain intact.
+- Unnecessary complexity/nesting; redundant code or abstractions to consolidate.
+- Unclear names; comments that just restate the code.
+- Nested ternaries (prefer if/else or switch); overly clever one-liners.
+- Unsafe casts, `any` types, unchecked assumptions.
+- Security: injection, credential leaks, unvalidated input at trust boundaries.
+
+This is also where **refactoring** happens (the implementer deliberately left it
+out of its red→green loop). Improve *how* the code reads without changing *what*
+it does — preserve all behaviour and keep tests green.
+
+Maintain balance — don't over-simplify into something harder to debug, don't
+collapse helpful abstractions, don't merge unrelated concerns.
 
 # EXECUTION
 
-If you find improvements to make:
-
-1. Make the changes directly on this branch
-2. Run tests and type checking to ensure nothing is broken
-3. Commit describing the refinements
-
-If the code is already clean and well-structured, do nothing.
+1. Do the Spec axis first, then Standards. Make changes directly on the branch.
+2. Run type-checking and tests after your changes — everything must stay green.
+3. If you changed anything, commit describing the review fixes (Spec gaps closed,
+   refactors applied). If the code already satisfies the issue and is clean, do
+   nothing.
 
 Once complete, output <promise>COMPLETE</promise>.
