@@ -115,6 +115,20 @@ unless you want the next run to rebuild from the `Dockerfile`.
 
 See `.sandcastle/MODELS.md` for the full routing guide.
 
+## `/sandcastle` — check an install, or set one up
+
+`skills/sandcastle/SKILL.md` is a Claude Code skill that audits a repo's harness
+(files, deps, the three slots below, label, models, prompt wiring, whether a run
+is already live, stray containers) and walks a new project through setup. Install
+it once, for every repo:
+
+```bash
+ln -s "$PWD/skills/sandcastle" ~/.claude/skills/sandcastle
+```
+
+Then `/sandcastle` in any project. It reads config, never guesses it — every
+answer comes from a command it runs.
+
 ## Project knowledge — the three things only you can tell it
 
 The harness is generic on purpose: it knows how to plan, implement, review and
