@@ -287,7 +287,11 @@ const dirtyWorktrees = (() => {
       .filter((name) => {
         const path = join(process.cwd(), ".sandcastle", "worktrees", name);
         try {
-          return execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" }).trim() !== "";
+          // Agents leave their own runtime droppings in the tree (.claude/).
+          // Blocking a run on those trains you to ignore the guard.
+          return execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" })
+            .split("\n")
+            .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l));
         } catch {
           return false; // not a worktree (or already gone) — leave it alone
         }

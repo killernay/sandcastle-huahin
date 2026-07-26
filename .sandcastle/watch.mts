@@ -103,8 +103,11 @@ if (runCount === 0 && containers > 0) problems.push(`${containers} sandcastle co
 // from a dead run is a problem, and the next start will refuse to run anyway.
 if (runCount === 0) {
   try {
-    const dirty = readdirSync(join(root, ".sandcastle", "worktrees")).filter(
-      (n) => sh(`git -C .sandcastle/worktrees/${n} status --porcelain`) !== "",
+    // Same rule as main.mts: agent runtime droppings under .claude/ don't count.
+    const dirty = readdirSync(join(root, ".sandcastle", "worktrees")).filter((n) =>
+      sh(`git -C .sandcastle/worktrees/${n} status --porcelain`)
+        .split("\n")
+        .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l)),
     );
     if (dirty.length > 0) problems.push(`worktree(s) left dirty by a stopped run: ${dirty.join(", ")} — the next start will refuse until you clear them`);
   } catch {}
