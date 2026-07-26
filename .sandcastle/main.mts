@@ -23,6 +23,7 @@
 
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -143,6 +144,23 @@ const PROJECT_RULES = (() => {
     return "";
   }
 })();
+
+// Is there anything on this branch to merge? Asked of git on the host, not of
+// the run: sandbox.run() reports only the commits IT produced, so a branch whose
+// work landed in an earlier round is invisible to it. Branches are reused, so
+// that case is normal — the implementer opens the branch, finds the job already
+// done, and correctly commits nothing. Gating the merge on the run's own commits
+// then drops a finished branch, the merge never happens, the issue stays open,
+// and the next round plans the same work again. Every iteration, forever.
+// ponytail: git already knows; don't infer it from what the agent returned.
+const BASE_BRANCH = execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+const commitsAhead = (branch: string) => {
+  try {
+    return Number(execSync(`git rev-list --count ${BASE_BRANCH}..${branch}`, { encoding: "utf8" }).trim());
+  } catch {
+    return 0; // branch doesn't exist yet — nothing to merge
+  }
+};
 
 // Models preflight found live on 9router (set by preflightModels()). Used to
 // skip a known-dead model in the fallback chain instead of wasting a run on it.
@@ -377,8 +395,9 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         }
         if (!implement) throw lastErr ?? new Error(`all impl models failed for ${issue.id}`);
 
-        // Only review if the implementer produced commits
-        if (implement.commits.length > 0) {
+        // Review whenever the branch carries work — including work committed in
+        // an earlier round that was never merged, which this round is about to.
+        if (commitsAhead(issue.branch) > 0) {
           const review = await sandbox.run({
             name: "reviewer",
             maxIterations: 1,
@@ -432,14 +451,15 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     );
   }
 
-  // Only pass branches that actually produced commits to the merge phase.
-  // An agent that ran successfully but made no commits has nothing to merge.
+  // Pass every branch that is ahead of the base branch to the merge phase —
+  // whether the commits landed this round or an earlier one. A pipeline that
+  // threw is excluded: its branch may be half-written.
   const completedIssues = settled
     .map((outcome, i) => ({ outcome, issue: issues[i]! }))
     .filter(
       (entry) =>
         entry.outcome.status === "fulfilled" &&
-        entry.outcome.value.commits.length > 0,
+        commitsAhead(entry.issue.branch) > 0,
     )
     .map((entry) => entry.issue);
 
