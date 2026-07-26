@@ -23,7 +23,6 @@
 
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
-import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -110,18 +109,6 @@ const ISSUE_LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
 // sprint-status.yaml or roadmap doc). Empty = no such file; the planner then
 // orders by issue body/labels alone.
 const DEP_ORDER_FILE = process.env.DEP_ORDER_FILE ?? "";
-
-// The branch the run started on — what issue branches are diffed and merged
-// against. Captured on the HOST: inside a sandbox, HEAD is the issue branch, so
-// asking there would diff a branch against itself.
-const TARGET_BRANCH =
-  process.env.SANDCASTLE_TARGET_BRANCH ??
-  execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
-if (TARGET_BRANCH === "HEAD") {
-  throw new Error(
-    "Detached HEAD — set SANDCASTLE_TARGET_BRANCH to the branch to diff/merge against.",
-  );
-}
 
 // What every agent is told about repo layout and how to run checks. This is
 // load-bearing, not boilerplate: a generic hint is a false-green risk — an agent
@@ -383,10 +370,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             maxIterations: 1,
             agent: agent(modelFor("REVIEW")),
             promptFile: "./.sandcastle/review-prompt.md",
+            // review-prompt.md also uses {{TARGET_BRANCH}} (and {{SOURCE_BRANCH}}
+            // is available). Do NOT pass them: they are BUILT-IN args the
+            // library injects itself (TARGET_BRANCH = the host's branch), and
+            // passing one is a hard PromptError, not an override.
             promptArgs: {
               TASK_ID: issue.id,
               BRANCH: issue.branch,
-              TARGET_BRANCH,
               WORKSPACE_HINT,
             },
           });

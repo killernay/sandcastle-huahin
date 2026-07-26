@@ -60,6 +60,9 @@ console.log(`9router key: ${r9key() ? "present ✓" : "MISSING ✗"}   reachable
 // ponytail: matches the name anywhere in main.mts, not against the specific
 // call site — so a name used by one prompt and added to a second still reads as
 // wired. Catches "never wired at all", which is the bug that actually happens.
+// SOURCE_BRANCH/TARGET_BRANCH are supplied by the library itself; passing them
+// is an error, so they are legitimately absent from main.mts.
+const BUILT_IN = new Set(["SOURCE_BRANCH", "TARGET_BRANCH"]);
 const here = join(process.cwd(), ".sandcastle");
 const mainSrc = readFileSync(join(here, "main.mts"), "utf8");
 const unwired: string[] = [];
@@ -68,6 +71,7 @@ for (const file of ["plan-prompt.md", "implement-prompt.md", "review-prompt.md",
     [...readFileSync(join(here, file), "utf8").matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]!),
   );
   for (const name of names) {
+    if (BUILT_IN.has(name)) continue;
     if (!new RegExp(`\\b${name}\\b`).test(mainSrc)) unwired.push(`${file}: {{${name}}}`);
   }
 }
