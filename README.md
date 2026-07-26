@@ -120,15 +120,18 @@ See `.sandcastle/MODELS.md` for the full routing guide.
 `.sandcastle/skill/SKILL.md` is a Claude Code skill that audits a repo's harness
 (files, deps, the three slots below, label, models, prompt wiring, whether a run
 is already live, stray containers) and walks a new project through setup. It
-ships inside `.sandcastle/`, so every install already has it — link it once, from
-any project, and it's available in all of them:
+ships inside `.sandcastle/`, so every install already has it. `install.sh` links
+it for you; after a `degit` install, one line:
 
 ```bash
-ln -s "$PWD/.sandcastle/skill" ~/.claude/skills/sandcastle
+mkdir -p .claude/skills && ln -s ../../.sandcastle/skill .claude/skills/sandcastle
 ```
 
-Then `/sandcastle` in any project. It reads config, never guesses it — every
-answer comes from a command it runs.
+Project-scoped on purpose — a relative symlink inside the repo, nothing written
+to `~/.claude`, and it follows the harness when you re-sync `.sandcastle`. Commit
+it if your repo tracks `.claude/`; if `.claude/skills` is gitignored the link
+still works, it just isn't shared with the team. Then `/sandcastle` in that repo: it reads config, never guesses
+it — every answer comes from a command it runs.
 
 ## Project knowledge — the three things only you can tell it
 

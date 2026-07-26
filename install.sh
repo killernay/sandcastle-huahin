@@ -26,6 +26,17 @@ cp -R "$SRC" "$DEST"
 # Ensure a fresh .env from the template
 [[ -f "$DEST/.env" ]] || cp "$DEST/.env.example" "$DEST/.env"
 
+# Make /sandcastle available in THIS repo only — a relative symlink, so it stays
+# inside the project (nothing written to ~/.claude) and follows the harness when
+# .sandcastle is re-synced.
+if [[ -e "$TARGET/.claude/skills/sandcastle" ]]; then
+  echo "• $TARGET/.claude/skills/sandcastle already exists — left alone"
+else
+  mkdir -p "$TARGET/.claude/skills"
+  ln -s ../../.sandcastle/skill "$TARGET/.claude/skills/sandcastle"
+  echo "✓ Linked /sandcastle into .claude/skills (project-scoped)"
+fi
+
 echo "✓ Copied harness to $DEST"
 echo
 echo "Next steps:"
@@ -34,7 +45,7 @@ echo "       $DEST/.env               WORKSPACE_DIR, ISSUE_LABEL, GH_TOKEN, DEP_
 echo "       $DEST/workspace-hint.md  how to run this repo's checks (real script names)"
 echo "       $DEST/planning-rules.md  what the planner can't know: finished epics,"
 echo "                                work blocked outside the repo, deferred stories"
-echo "     ln -s \"$DEST/skill\" ~/.claude/skills/sandcastle   # then /sandcastle audits all of it"
+echo "     Run /sandcastle in this repo to audit all of it."
 echo "  2. cd $TARGET && npm install -D @ai-hero/sandcastle tsx zod"
 echo "  3. npm pkg set scripts.sandcastle=\"tsx .sandcastle/main.mts\""
 echo "  4. 9router &   # start the gateway"

@@ -85,7 +85,7 @@ npx degit killernay/sandcastle-huahin/.sandcastle .sandcastle
 cp .sandcastle/.env.example .sandcastle/.env
 npm i -D @ai-hero/sandcastle tsx zod
 npm pkg set scripts.sandcastle="tsx .sandcastle/main.mts"
-ln -s "$PWD/.sandcastle/skill" ~/.claude/skills/sandcastle   # if /sandcastle isn't linked yet
+mkdir -p .claude/skills && ln -s ../../.sandcastle/skill .claude/skills/sandcastle
 ```
 
 Then fill the three slots (interview the user — do not invent epics, labels or
