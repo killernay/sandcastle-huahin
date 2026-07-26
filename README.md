@@ -117,13 +117,14 @@ See `.sandcastle/MODELS.md` for the full routing guide.
 
 ## `/sandcastle` — check an install, or set one up
 
-`skills/sandcastle/SKILL.md` is a Claude Code skill that audits a repo's harness
+`.sandcastle/skill/SKILL.md` is a Claude Code skill that audits a repo's harness
 (files, deps, the three slots below, label, models, prompt wiring, whether a run
-is already live, stray containers) and walks a new project through setup. Install
-it once, for every repo:
+is already live, stray containers) and walks a new project through setup. It
+ships inside `.sandcastle/`, so every install already has it — link it once, from
+any project, and it's available in all of them:
 
 ```bash
-ln -s "$PWD/skills/sandcastle" ~/.claude/skills/sandcastle
+ln -s "$PWD/.sandcastle/skill" ~/.claude/skills/sandcastle
 ```
 
 Then `/sandcastle` in any project. It reads config, never guesses it — every
