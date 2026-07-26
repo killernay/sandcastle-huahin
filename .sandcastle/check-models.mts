@@ -1,6 +1,7 @@
-// Preflight check: does .env load, do model ids resolve, and are they LIVE on
-// 9router right now? Run before a real run to avoid burning tokens on a dead
-// model id.  Usage: npx tsx .sandcastle/check-models.mts
+// Preflight check: does .env load, do model ids resolve, are they LIVE on
+// 9router right now, and is every {{PLACEHOLDER}} in the prompts actually wired
+// up in main.mts? Run before a real run to avoid burning tokens on a dead model
+// id or an unwired prompt arg.  Usage: npx tsx .sandcastle/check-models.mts
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -52,8 +53,29 @@ console.log(`MERGE          ${MERGE.padEnd(26)} ${reachable ? live(MERGE) : "?"}
 console.log("─".repeat(62));
 console.log(`9router key: ${r9key() ? "present ✓" : "MISSING ✗"}   reachable: ${reachable ? "yes ✓" : "NO ✗"}`);
 
+// Prompt wiring: the library HARD-FAILS a run when a prompt references a
+// {{PLACEHOLDER}} that main.mts never passes ("Prompt argument … has no
+// matching value"), and that throw lands deep inside the per-issue retry, where
+// it reads as a model failure. Catch it here in 10ms instead.
+// ponytail: matches the name anywhere in main.mts, not against the specific
+// call site — so a name used by one prompt and added to a second still reads as
+// wired. Catches "never wired at all", which is the bug that actually happens.
+const here = join(process.cwd(), ".sandcastle");
+const mainSrc = readFileSync(join(here, "main.mts"), "utf8");
+const unwired: string[] = [];
+for (const file of ["plan-prompt.md", "implement-prompt.md", "review-prompt.md", "merge-prompt.md"]) {
+  const names = new Set(
+    [...readFileSync(join(here, file), "utf8").matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]!),
+  );
+  for (const name of names) {
+    if (!new RegExp(`\\b${name}\\b`).test(mainSrc)) unwired.push(`${file}: {{${name}}}`);
+  }
+}
+console.log(`Prompt args: ${unwired.length === 0 ? "all wired ✓" : `UNWIRED ✗ — ${unwired.join(", ")}`}`);
+
 const wanted = [...new Set([PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE])];
 const missing = reachable ? wanted.filter((m) => !available.has(m)) : wanted;
+if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
 if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }
 if (missing.length) { console.error(`FAIL: not on 9router: ${missing.join(", ")}`); process.exit(1); }
 console.log("OK — all models live");

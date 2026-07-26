@@ -54,7 +54,10 @@ collapse helpful abstractions, don't merge unrelated concerns.
 # EXECUTION
 
 1. Do the Spec axis first, then Standards. Make changes directly on the branch.
-2. Run type-checking and tests after your changes — everything must stay green.
+2. Run the checks below after your changes — everything must stay green.
+
+{{WORKSPACE_HINT}}
+
 3. If you changed anything, commit describing the review fixes (Spec gaps closed,
    refactors applied). If the code already satisfies the issue and is clean, do
    nothing.

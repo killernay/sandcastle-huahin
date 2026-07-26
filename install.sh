@@ -30,6 +30,7 @@ echo "✓ Copied harness to $DEST"
 echo
 echo "Next steps:"
 echo "  1. Edit $DEST/.env  (WORKSPACE_DIR, ISSUE_LABEL, GH_TOKEN, DEP_ORDER_FILE)"
+echo "     …and write $DEST/workspace-hint.md — how to run this repo's checks"
 echo "  2. cd $TARGET && npm install -D @ai-hero/sandcastle tsx zod"
 echo "  3. npm pkg set scripts.sandcastle=\"tsx .sandcastle/main.mts\""
 echo "  4. 9router &   # start the gateway"

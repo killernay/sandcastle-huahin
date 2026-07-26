@@ -54,12 +54,32 @@ tail -f .sandcastle/run.log
 | `WORKSPACE_DIR` | Subdir with the pnpm workspace (empty = repo root) | `` |
 | `ISSUE_LABEL` | GitHub label the planner filters by | `ready-for-agent` |
 | `DEP_ORDER_FILE` | Optional build-order file (e.g. a sprint-status.yaml / roadmap) | `` |
+| `SANDCASTLE_TARGET_BRANCH` | Base branch to diff/merge against | current branch |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
 | `MODEL_PLAN/REVIEW/MERGE` | Reasoning + QC models | `cc/claude-opus-4-8` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |
 | `MODEL_IMPL_LARGE` | Strong model for hard issues | `kimi/kimi-k3` |
 
 See `.sandcastle/MODELS.md` for the full routing guide.
+
+### Tell the agents where the code is — `.sandcastle/workspace-hint.md`
+
+Optional file, no placeholders, plain markdown. It replaces the generic
+"run `pnpm typecheck && pnpm test`" hint given to the implementer, reviewer and
+merger with this repo's real layout and script names:
+
+```md
+The app lives in `apps/web/` (pnpm workspace) — **not** the repo root.
+
+- `cd apps/web && pnpm typecheck` — fastest signal, run it often
+- `cd apps/web && pnpm ci` — lint + typecheck + test + build; must pass before you commit
+
+The repo root has no tests. `pnpm test` there exits clean — that is not a green build.
+```
+
+Worth the five minutes: an agent that runs tests in a directory that has none
+gets exit 0 and reports success. `check-models.mts` can't catch that; only this
+file can.
 
 ## Pairs with [mattpocock/skills](https://github.com/mattpocock/skills)
 

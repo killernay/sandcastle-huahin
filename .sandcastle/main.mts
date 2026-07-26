@@ -23,6 +23,7 @@
 
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -109,6 +110,39 @@ const ISSUE_LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
 // sprint-status.yaml or roadmap doc). Empty = no such file; the planner then
 // orders by issue body/labels alone.
 const DEP_ORDER_FILE = process.env.DEP_ORDER_FILE ?? "";
+
+// The branch the run started on — what issue branches are diffed and merged
+// against. Captured on the HOST: inside a sandbox, HEAD is the issue branch, so
+// asking there would diff a branch against itself.
+const TARGET_BRANCH =
+  process.env.SANDCASTLE_TARGET_BRANCH ??
+  execSync("git rev-parse --abbrev-ref HEAD", { encoding: "utf8" }).trim();
+if (TARGET_BRANCH === "HEAD") {
+  throw new Error(
+    "Detached HEAD — set SANDCASTLE_TARGET_BRANCH to the branch to diff/merge against.",
+  );
+}
+
+// What every agent is told about repo layout and how to run checks. This is
+// load-bearing, not boilerplate: a generic hint is a false-green risk — an agent
+// that runs `pnpm test` at a root with no test script gets exit 0 and reports
+// success. Projects override it with .sandcastle/workspace-hint.md (real script
+// names, real gotchas); the default below only knows WORKSPACE_DIR.
+// ponytail: a file beats a multi-line .env value; absent = generated default.
+const WORKSPACE_HINT = (() => {
+  try {
+    return readFileSync(join(process.cwd(), ".sandcastle", "workspace-hint.md"), "utf8").trim();
+  } catch {
+    return WORKSPACE_DIR
+      ? `The workspace lives in \`${WORKSPACE_DIR}/\` — **not** the repo root. Run every ` +
+          `check from there: \`${CD_WS}pnpm typecheck && pnpm test\`, and both must pass ` +
+          `before you commit.\n\nThe repo root is not the workspace: \`pnpm test\` there ` +
+          `finds no tests and exits clean — that is NOT a green build.`
+      : `Run \`pnpm typecheck && pnpm test\` (or this repo's equivalent — read the ` +
+          `\`scripts\` in package.json) before committing. A command that finds no tests ` +
+          `and exits clean is NOT a green build.`;
+  }
+})();
 
 // Models preflight found live on 9router (set by preflightModels()). Used to
 // skip a known-dead model in the fallback chain instead of wasting a run on it.
@@ -247,10 +281,19 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     promptFile: "./.sandcastle/plan-prompt.md",
     promptArgs: {
       ISSUE_LABEL,
-      // Shell snippet the prompt inlines to show the dep-order file, or a note
-      // when there isn't one. Keeps the prompt project-agnostic.
+      // The dep-order file's CONTENT, read on the host, or a note when there
+      // isn't one. It must be content, not a "!`cat …`" shell block: the library
+      // only expands shell blocks written literally in the prompt file and
+      // strips its marker from promptArgs values, so an injected block would
+      // reach the planner as literal backtick text.
       DEP_ORDER_BLOCK: DEP_ORDER_FILE
-        ? "!`cat " + DEP_ORDER_FILE + " 2>/dev/null || echo '(dependency-order file not found)'`"
+        ? (() => {
+            try {
+              return readFileSync(join(process.cwd(), DEP_ORDER_FILE), "utf8");
+            } catch {
+              return `(dependency-order file ${DEP_ORDER_FILE} not found)`;
+            }
+          })()
         : "(No dependency-order file configured — order by issue body, labels, and dependencies.)",
     },
     // Extract and validate the <plan> JSON into a typed object. Throws
@@ -314,10 +357,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
                 TASK_ID: issue.id,
                 ISSUE_TITLE: issue.title,
                 BRANCH: issue.branch,
-                // How to run checks: cd into the workspace subdir if there is one.
-                WORKSPACE_HINT: WORKSPACE_DIR
-                  ? `The workspace lives in the \`${WORKSPACE_DIR}/\` subdirectory. Run \`${CD_WS}pnpm typecheck && pnpm test\` before committing.`
-                  : "Run `pnpm typecheck && pnpm test` (or the repo's equivalent) before committing.",
+                WORKSPACE_HINT,
               },
             });
             if (model !== chain[0]) {
@@ -325,6 +365,11 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             }
             break;
           } catch (e) {
+            // A missing/blank prompt arg is a config bug, not a model failure —
+            // no other model can fix it. Retrying buries it as "model failed"
+            // once per fallback × issue × iteration, then prints "Execution
+            // complete". Fail on the first one instead.
+            if ((e as Error).message?.includes("Prompt argument")) throw e;
             lastErr = e;
             console.warn(`  ⚠ ${issue.id}: implementer on ${model} threw (${(e as Error).message}); trying next model`);
           }
@@ -341,6 +386,8 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             promptArgs: {
               TASK_ID: issue.id,
               BRANCH: issue.branch,
+              TARGET_BRANCH,
+              WORKSPACE_HINT,
             },
           });
 
@@ -366,6 +413,19 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
         `  ✗ ${issues[i]!.id} (${issues[i]!.branch}) failed: ${outcome.reason}`,
       );
     }
+  }
+
+  // Every pipeline dying is systemic (bad config, dead gateway, broken prompt) —
+  // not "the agents had nothing to commit". Nine more quiet iterations won't
+  // fix it, and finishing with "All done." hides the failure. Stop here.
+  // ponytail: loud over resilient — with a single planned issue, one flaky run
+  // also stops the loop. Rerunning is one command; a silent AFK night isn't.
+  const rejected = settled.filter((o) => o.status === "rejected");
+  if (rejected.length === settled.length) {
+    throw new Error(
+      `All ${settled.length} issue pipeline(s) failed this iteration — aborting.\n` +
+        `First error: ${(rejected[0] as PromiseRejectedResult).reason}`,
+    );
   }
 
   // Only pass branches that actually produced commits to the merge phase.
@@ -415,6 +475,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
       // A markdown list of issue IDs and titles, one per line.
       ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
+      WORKSPACE_HINT,
       // Tell the merger to write completed stories back to the dep-order file so
       // the next planning round doesn't treat finished work as pending. Only when
       // a DEP_ORDER_FILE is configured — otherwise there's nothing to update.
