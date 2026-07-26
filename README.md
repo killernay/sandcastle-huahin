@@ -83,6 +83,24 @@ ps -eo pid,lstart,command | grep "[m]ain.mts"   # anything already running?
 pkill -f "tsx .sandcastle/main.mts"             # stop it
 ```
 
+### The pile of Docker containers is normal
+
+Each issue in flight holds **two** containers — one from `createSandbox()`, one
+from the agent's `sandbox.run()` — so a plan with 3 issues shows 6. Each pair is
+bound to that issue's own worktree; they don't share state and don't collide.
+The only shared thing is the pnpm store mount, and pnpm locks it itself.
+
+```bash
+docker ps --filter name=sandcastle --format "{{.Names}} {{.Status}}"   # what's live
+docker ps -a --filter name=sandcastle -q | wc -l                       # leftovers?
+docker rm -f $(docker ps -aq --filter name=sandcastle)                 # if any survived
+```
+
+Sandcastle removes its containers when the run ends — including after `pkill`,
+so an empty list right after stopping is expected, not a sign the run never
+started. The `sandcastle:<repo>` image (~2 GB) is built once and reused; leave it
+unless you want the next run to rebuild from the `Dockerfile`.
+
 ## Configuration (`.sandcastle/.env`)
 
 | Var | What | Default |

@@ -82,10 +82,16 @@ console.log(`Prompt args: ${unwired.length === 0 ? "all wired ✓" : `UNWIRED �
 const overridden = [...mainSrc.matchAll(/^\s*(SOURCE_BRANCH|TARGET_BRANCH)\s*[,:]/gm)].map((m) => m[1]!);
 console.log(`Built-ins:   ${overridden.length === 0 ? "not overridden ✓" : `PASSED BY main.mts ✗ — ${[...new Set(overridden)].join(", ")}`}`);
 
-const wanted = [...new Set([PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE])];
-const missing = reachable ? wanted.filter((m) => !available.has(m)) : wanted;
+// Same rule main.mts enforces at run time, so this CLI can't disagree with the
+// loop it is meant to predict: plan/review/merge have no fallback and must be
+// live; the two IMPL tiers fall back to each other, so one being offline is a
+// warning and only losing both is fatal.
+const coreMissing = reachable ? [...new Set([PLAN, REVIEW, MERGE])].filter((m) => !available.has(m)) : [PLAN, REVIEW, MERGE];
+const implLive = reachable ? [IMPL_SMALL, IMPL_LARGE].filter((m) => available.has(m)) : [];
 if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
 if (overridden.length) { console.error(`FAIL: built-in prompt args passed by main.mts: ${[...new Set(overridden)].join(", ")} — the library supplies these; passing one throws.`); process.exit(1); }
 if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }
-if (missing.length) { console.error(`FAIL: not on 9router: ${missing.join(", ")}`); process.exit(1); }
-console.log("OK — all models live");
+if (coreMissing.length) { console.error(`FAIL: plan/review/merge models not on 9router (no fallback for those): ${coreMissing.join(", ")}`); process.exit(1); }
+if (implLive.length === 0) { console.error(`FAIL: both implementer models are offline: ${IMPL_SMALL}, ${IMPL_LARGE}`); process.exit(1); }
+if (implLive.length === 1) { console.warn(`⚠ one implementer tier is offline — all IMPL work will run on ${implLive[0]}`); }
+console.log("OK — ready to run");
