@@ -111,6 +111,13 @@ const ISSUE_LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
 // orders by issue body/labels alone.
 const DEP_ORDER_FILE = process.env.DEP_ORDER_FILE ?? "";
 
+// How many issues the planner may take per round. Each one runs an implementer
+// and a reviewer in its own sandbox, so this is the loop's parallelism dial.
+// The ceiling is rarely the machine (agents spend most of their time waiting on
+// the model): it's your gateway's throughput, and how often two issues touching
+// the same module collide in the merge.
+const BATCH_SIZE = process.env.BATCH_SIZE ?? "3";
+
 // What every agent is told about repo layout and how to run checks. This is
 // load-bearing, not boilerplate: a generic hint is a false-green risk — an agent
 // that runs `pnpm test` at a root with no test script gets exit 0 and reports
@@ -336,6 +343,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     promptArgs: {
       ISSUE_LABEL,
       PROJECT_RULES,
+      BATCH_SIZE,
       // The dep-order file's CONTENT, read on the host, or a note when there
       // isn't one. It must be content, not a "!`cat …`" shell block: the library
       // only expands shell blocks written literally in the prompt file and

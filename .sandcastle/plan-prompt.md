@@ -31,7 +31,7 @@ Pick the issues that are safe to work **in parallel right now**. Rules, in order
 4. **No file-overlap conflicts.** If two candidate issues would touch the same
    module, select only the earlier one this round.
 
-5. **Batch size:** select at most **3** issues this round. Fewer is fine. The
+5. **Batch size:** select at most **{{BATCH_SIZE}}** issues this round. Fewer is fine. The
    outer loop re-plans after each merge, so remaining work is picked up next cycle.
 
 {{PROJECT_RULES}}
@@ -58,5 +58,5 @@ Output as JSON wrapped in `<plan>` tags:
 </plan>
 
 Every issue MUST include `size` ("small" or "large"). Include only selected
-unblocked issues (max 3). If everything ready is blocked, emit
+unblocked issues (max {{BATCH_SIZE}}). If everything ready is blocked, emit
 `<plan>{"issues": []}</plan>` so the run exits cleanly. Always emit the tags.

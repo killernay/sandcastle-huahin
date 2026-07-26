@@ -123,6 +123,7 @@ unless you want the next run to rebuild from the `Dockerfile`.
 | `WORKSPACE_DIR` | Subdir with the pnpm workspace (empty = repo root) | `` |
 | `ISSUE_LABEL` | GitHub label the planner filters by | `ready-for-agent` |
 | `DEP_ORDER_FILE` | Optional build-order file (e.g. a sprint-status.yaml / roadmap) | `` |
+| `BATCH_SIZE` | Issues the planner may take per round (parallelism) | `3` |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
 | `MODEL_PLAN/REVIEW/MERGE` | Reasoning + QC models | `cc/claude-opus-4-8` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |
