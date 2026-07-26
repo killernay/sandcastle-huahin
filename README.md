@@ -49,6 +49,21 @@ tail -f .sandcastle/run.log
 
 ## Monitoring a run
 
+The fast answer, before you read any log:
+
+```bash
+npx tsx .sandcastle/watch.mts                                 # exit 1 = needs a human
+while :; do npx tsx .sandcastle/watch.mts; sleep 300; done    # a check cycle
+```
+
+One line when healthy. When not, it names the failure: two loops running at
+once, no output for 20+ minutes, a `PromptError` (a config bug, not a model
+one), two iterations in a row that merged nothing, the same issues planned
+twice, orphaned containers, worktrees left dirty by a dead run. Each of those is
+a real failure this harness has had, and every one of them looks like normal
+progress in the log.
+
+
 Two levels of log. `run.log` is the orchestrator's own narration — phases, the
 plan, which branches produced commits. Each agent additionally writes its full
 transcript to `.sandcastle/logs/<branch>-<role>.log`.

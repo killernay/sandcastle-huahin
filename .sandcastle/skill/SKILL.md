@@ -133,6 +133,22 @@ ls -t .sandcastle/logs/*.log | head -4 | xargs tail -n 5 -F    # this round only
 
 The glob expands once — re-run it when a new `[implementer] Started` appears.
 
+## While it runs — check on a cycle, not on a hunch
+
+```bash
+npx tsx .sandcastle/watch.mts                                   # one verdict, exit 1 if unhealthy
+while :; do npx tsx .sandcastle/watch.mts; sleep 300; done      # every 5 min
+```
+
+It reads the run log, git, `ps` and `docker` and reports the failures that are
+otherwise invisible for hours: two loops at once, no output for 20+ minutes (a
+stalled or hung agent), a `✗`/`PromptError` pipeline failure, two iterations in
+a row that merged nothing, the same issues planned twice, orphaned containers,
+worktrees a dead run left dirty. Healthy output is one line.
+
+Run it before answering "how's it going" — the run log's last ten lines look the
+same whether the loop is working or spinning.
+
 ## When a run ends with no commits
 
 In order, stop at the first that explains it:
