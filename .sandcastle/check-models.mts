@@ -77,9 +77,15 @@ for (const file of ["plan-prompt.md", "implement-prompt.md", "review-prompt.md",
 }
 console.log(`Prompt args: ${unwired.length === 0 ? "all wired ✓" : `UNWIRED ✗ — ${unwired.join(", ")}`}`);
 
+// The inverse mistake, and the more expensive one: passing a built-in is a hard
+// PromptError at run time, on every phase, however sensible it looks in a diff.
+const overridden = [...mainSrc.matchAll(/^\s*(SOURCE_BRANCH|TARGET_BRANCH)\s*[,:]/gm)].map((m) => m[1]!);
+console.log(`Built-ins:   ${overridden.length === 0 ? "not overridden ✓" : `PASSED BY main.mts ✗ — ${[...new Set(overridden)].join(", ")}`}`);
+
 const wanted = [...new Set([PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE])];
 const missing = reachable ? wanted.filter((m) => !available.has(m)) : wanted;
 if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
+if (overridden.length) { console.error(`FAIL: built-in prompt args passed by main.mts: ${[...new Set(overridden)].join(", ")} — the library supplies these; passing one throws.`); process.exit(1); }
 if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }
 if (missing.length) { console.error(`FAIL: not on 9router: ${missing.join(", ")}`); process.exit(1); }
 console.log("OK — all models live");
