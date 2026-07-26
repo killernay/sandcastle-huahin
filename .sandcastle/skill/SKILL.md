@@ -53,6 +53,9 @@ ps -eo pid,lstart,command | grep "[t]sx .sandcastle/main.mts"
 
 # 11. containers: 2 per issue in flight is normal; only non-zero with NO run live is a leak
 docker ps -a --filter name=sandcastle -q | wc -l
+
+# 12. worktrees left dirty by a killed run — the next implementer would inherit them
+for w in .sandcastle/worktrees/*/; do [ -d "$w" ] && git -C "$w" status --porcelain | head -3; done
 ```
 
 Count runs with the `[t]sx` pattern, not `main.mts` — one run is two processes

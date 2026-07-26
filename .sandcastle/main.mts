@@ -24,7 +24,7 @@
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -275,6 +275,38 @@ const agent = (model: string) => sandcastle.claudeCode(model);
 // Fail fast if required models are missing; capture the live set so the
 // fallback chain can skip a known-dead implementer model.
 liveModels = await preflightModels();
+
+// Worktrees are reused across runs. One left dirty by a killed run hands the
+// next implementer a tree it didn't write — half-finished edits it will read as
+// its own prior work, commit around, or "fix". Refuse to start instead: the
+// cleanup is one command, but the confusion it causes looks like a model going
+// haywire. ponytail: report and stop; deleting someone's work is not our call.
+const dirtyWorktrees = (() => {
+  try {
+    return readdirSync(join(process.cwd(), ".sandcastle", "worktrees"))
+      .filter((name) => {
+        const path = join(process.cwd(), ".sandcastle", "worktrees", name);
+        try {
+          return execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" }).trim() !== "";
+        } catch {
+          return false; // not a worktree (or already gone) — leave it alone
+        }
+      });
+  } catch {
+    return []; // no worktrees dir yet — first run
+  }
+})();
+if (dirtyWorktrees.length > 0) {
+  throw new Error(
+    `Uncommitted changes in reused worktree(s): ${dirtyWorktrees.join(", ")}\n` +
+      `A previous run was killed mid-edit. Inspect, then either commit the work on its\n` +
+      `branch or discard it:\n` +
+      dirtyWorktrees
+        .map((n) => `  git -C .sandcastle/worktrees/${n} status`)
+        .join("\n") +
+      `\n  rm -rf .sandcastle/worktrees && git worktree prune   # discard all of it`,
+  );
+}
 
 for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   console.log(`\n=== Iteration ${iteration}/${MAX_ITERATIONS} ===\n`);
