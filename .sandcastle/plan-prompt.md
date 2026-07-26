@@ -34,6 +34,8 @@ Pick the issues that are safe to work **in parallel right now**. Rules, in order
 5. **Batch size:** select at most **3** issues this round. Fewer is fine. The
    outer loop re-plans after each merge, so remaining work is picked up next cycle.
 
+{{PROJECT_RULES}}
+
 For each selected issue assign branch `sandcastle/issue-{id}` (exact format, no slug).
 Deterministic so re-planning preserves accumulated progress.
 

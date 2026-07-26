@@ -131,6 +131,19 @@ const WORKSPACE_HINT = (() => {
   }
 })();
 
+// Selection rules only this project knows — which epics are finished, which are
+// blocked on someone outside the repo, which stories are deliberately deferred.
+// Lives in a file, not in plan-prompt.md, so re-syncing the harness from the
+// template can't silently delete a project's planning knowledge.
+const PROJECT_RULES = (() => {
+  try {
+    const body = readFileSync(join(process.cwd(), ".sandcastle", "planning-rules.md"), "utf8").trim();
+    return body ? `# PROJECT RULES (override the generic rules above)\n\n${body}` : "";
+  } catch {
+    return "";
+  }
+})();
+
 // Models preflight found live on 9router (set by preflightModels()). Used to
 // skip a known-dead model in the fallback chain instead of wasting a run on it.
 let liveModels: Set<string> | null = null;
@@ -268,6 +281,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     promptFile: "./.sandcastle/plan-prompt.md",
     promptArgs: {
       ISSUE_LABEL,
+      PROJECT_RULES,
       // The dep-order file's CONTENT, read on the host, or a note when there
       // isn't one. It must be content, not a "!`cat …`" shell block: the library
       // only expands shell blocks written literally in the prompt file and
@@ -476,8 +490,9 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
           `stories are still pending and stall.\n\n` +
           `For every story you just merged, find its entry in that file and mark ` +
           `it done (match by the \`<epic>-<story>\` number from the issue title). ` +
-          `Do NOT touch entries marked BLOCKED or DEFERRED. Include this edit in ` +
-          `the same merge commit.`
+          `If the file also tracks a parent/epic-level status, flip that to done ` +
+          `once all of its non-blocked children are done. Do NOT touch entries ` +
+          `marked BLOCKED or DEFERRED. Include this edit in the same merge commit.`
         : "",
     },
   });

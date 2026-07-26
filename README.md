@@ -115,6 +115,26 @@ unless you want the next run to rebuild from the `Dockerfile`.
 
 See `.sandcastle/MODELS.md` for the full routing guide.
 
+## Project knowledge — the three things only you can tell it
+
+The harness is generic on purpose: it knows how to plan, implement, review and
+merge, but nothing about *your* repo. Three slots carry that knowledge, and they
+are the three places to look when the agents do something dumb.
+
+| Where | What goes in | Survives a re-sync? |
+| --- | --- | --- |
+| `.sandcastle/.env` | `WORKSPACE_DIR`, `ISSUE_LABEL`, `DEP_ORDER_FILE`, tokens | yes — never copied over |
+| `.sandcastle/workspace-hint.md` | how to run this repo's checks (real script names) | yes — template ships no such file |
+| `.sandcastle/planning-rules.md` | selection rules only you know (finished epics, work blocked on someone outside the repo, deliberately deferred stories) | yes — same |
+
+Everything else in `.sandcastle/` — `main.mts`, the four prompts, `Dockerfile` —
+is template code. **Editing those in place works until the day you pull a newer
+harness on top and your edits vanish.** Project-specific content belongs in the
+three slots above; that's what they exist for.
+
+An empty slot is not an error, just less context: no `planning-rules.md` means
+the planner orders by issue bodies, labels and `DEP_ORDER_FILE` alone.
+
 ### Tell the agents where the code is — `.sandcastle/workspace-hint.md`
 
 Optional file, no placeholders, plain markdown. It replaces the generic
@@ -133,6 +153,22 @@ The repo root has no tests. `pnpm test` there exits clean — that is not a gree
 Worth the five minutes: an agent that runs tests in a directory that has none
 gets exit 0 and reports success. `check-models.mts` can't catch that; only this
 file can.
+
+### Tell the planner what you know — `.sandcastle/planning-rules.md`
+
+Also optional, also plain markdown. It is appended to the planner's generic
+selection rules as overrides, for the facts no issue tracker states out loud:
+
+```md
+- Skip anything under epic-11 (blocked on an external data owner), and stories
+  tagged DEFERRED in the dependency-order file (e.g. 5-12, 5-13).
+- Epics 1–4 are done. Work the lowest-numbered unfinished epic first.
+- Story keys in the yaml look like `8-5-checklist-execution-mobile:` — match by
+  the leading `<epic>-<story>` number in the issue title.
+```
+
+Without this the planner will happily select an issue that is technically
+unblocked and practically dead — the loop then burns a full cycle on it.
 
 ## Pairs with [mattpocock/skills](https://github.com/mattpocock/skills)
 
