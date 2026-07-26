@@ -42,9 +42,45 @@ npm install -D @ai-hero/sandcastle tsx zod
 9router &
 npx tsx .sandcastle/check-models.mts
 
-# 5. Run (AFK — survives terminal close)
+# 5. Run (AFK — survives terminal close). ONE run per repo — see Monitoring.
 nohup npm run sandcastle > .sandcastle/run.log 2>&1 &
 tail -f .sandcastle/run.log
+```
+
+## Monitoring a run
+
+Two levels of log. `run.log` is the orchestrator's own narration — phases, the
+plan, which branches produced commits. Each agent additionally writes its full
+transcript to `.sandcastle/logs/<branch>-<role>.log`.
+
+```bash
+# Overview — what the loop is doing
+tail -f .sandcastle/run.log
+
+# Overview + every agent at once. Headers (==> file <==) mark who's talking;
+# -n 5 keeps it from dumping tens of KB of history on start.
+tail -n 5 -F .sandcastle/run.log .sandcastle/logs/*.log
+
+# Just this round's agents (most recently written first)
+ls -t .sandcastle/logs/*.log | head -4 | xargs tail -n 5 -F
+
+# One agent, full detail
+tail -f .sandcastle/logs/sandcastle-issue-89-implementer.log
+```
+
+The glob is expanded once, when you press enter: agent logs created *after* that
+don't appear. Re-run the command when a new `[implementer] Started` line shows
+up in `run.log`.
+
+**Run only one loop per repo at a time.** Concurrent runs share
+`.sandcastle/worktrees/` and `run.log`: one run's `sandbox.close()` deletes a
+worktree while the other's agent is still working in it, so agents die with
+"the cwd was deleted", commits go uncounted, and the two logs interleave into
+something unreadable. Check before starting, and stop a run explicitly:
+
+```bash
+ps -eo pid,lstart,command | grep "[m]ain.mts"   # anything already running?
+pkill -f "tsx .sandcastle/main.mts"             # stop it
 ```
 
 ## Configuration (`.sandcastle/.env`)
