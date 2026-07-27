@@ -15,9 +15,12 @@ it's the *harness* (the `main.mts` loop + prompts you customise), wired for:
 - **Difficulty-based model routing** — the planner tags each issue `small` or
   `large`; small/easy issues go to a fast cheap model (Gemini), large/hard ones
   to a stronger model (Kimi K3). Fully configurable.
-- **Preflight + live-model fallback** — checks `GET /v1/models` before running.
-  Plan/review/merge models are required; implementer models fall back to their
-  sibling tier automatically if one is offline (e.g. you turned Kimi off).
+- **Preflight that asks, not assumes** — every model must be listed *and* answer
+  a one-token request before the run starts: a rate-limited account stays in
+  `/v1/models`, and the gateway returns 200 for an id that doesn't exist, so
+  either check alone lies. Plan/review/merge are required; implementer tiers fall
+  back to each other, and an issue whose models were all rate-limited waits and
+  runs again instead of being thrown away.
 - **Project-agnostic** — workspace dir, issue label, and dependency-order file
   are all env-driven, so it drops into any repo.
 
@@ -124,6 +127,8 @@ unless you want the next run to rebuild from the `Dockerfile`.
 | `ISSUE_LABEL` | GitHub label the planner filters by | `ready-for-agent` |
 | `DEP_ORDER_FILE` | Optional build-order file (e.g. a sprint-status.yaml / roadmap) | `` |
 | `BATCH_SIZE` | Issues the planner may take per round (parallelism) | `3` |
+| `INSTALL_CMD` | What the sandbox runs to make the repo buildable | pnpm install |
+| `RATE_LIMIT_WAIT_S` | Pause before retrying an issue whose models were all rate-limited | `90` |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
 | `MODEL_PLAN/REVIEW/MERGE` | Reasoning + QC models | `cc/claude-opus-4-8` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |

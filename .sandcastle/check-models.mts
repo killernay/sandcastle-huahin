@@ -42,7 +42,32 @@ try {
   console.error(`✗ cannot reach 9router at ${R9_URL} — is it running? (${(e as Error).message})`);
 }
 
-const live = (id: string) => (available.has(id) ? "live ✓" : "MISSING ✗");
+// Listed on the gateway is not the same as usable: a rate-limited or
+// unauthorized account keeps its entry in /v1/models and only fails when an
+// agent actually calls it. Ask each model for one token instead. (The reverse
+// is true too — the gateway answers 200 for an id that doesn't exist — so both
+// checks have to pass.)
+const answers = new Map<string, string>();
+if (reachable) {
+  const wanted = [...new Set([PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE])];
+  await Promise.all(
+    wanted.map(async (id) => {
+      if (!available.has(id)) return answers.set(id, "not on the gateway");
+      try {
+        const r = await fetch(`${R9_URL.replace("host.docker.internal", "localhost")}/v1/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${r9key()}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: id, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+        });
+        if (!r.ok) answers.set(id, `${r.status} ${(await r.text()).replace(/\s+/g, " ").slice(0, 70)}`);
+      } catch (e) {
+        answers.set(id, (e as Error).message.slice(0, 70));
+      }
+    }),
+  );
+}
+const usable = (id: string) => reachable && available.has(id) && !answers.has(id);
+const live = (id: string) => (usable(id) ? "answers ✓" : `✗ ${answers.get(id) ?? "MISSING"}`);
 console.log("Phase          Model                      9router");
 console.log("─".repeat(62));
 console.log(`PLAN           ${PLAN.padEnd(26)} ${reachable ? live(PLAN) : "?"}`);
@@ -86,8 +111,8 @@ console.log(`Built-ins:   ${overridden.length === 0 ? "not overridden ✓" : `PA
 // loop it is meant to predict: plan/review/merge have no fallback and must be
 // live; the two IMPL tiers fall back to each other, so one being offline is a
 // warning and only losing both is fatal.
-const coreMissing = reachable ? [...new Set([PLAN, REVIEW, MERGE])].filter((m) => !available.has(m)) : [PLAN, REVIEW, MERGE];
-const implLive = reachable ? [IMPL_SMALL, IMPL_LARGE].filter((m) => available.has(m)) : [];
+const coreMissing = [...new Set([PLAN, REVIEW, MERGE])].filter((m) => !usable(m));
+const implLive = [IMPL_SMALL, IMPL_LARGE].filter((m) => usable(m));
 if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
 if (overridden.length) { console.error(`FAIL: built-in prompt args passed by main.mts: ${[...new Set(overridden)].join(", ")} — the library supplies these; passing one throws.`); process.exit(1); }
 if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }

@@ -169,6 +169,19 @@ const commitsAhead = (branch: string) => {
   }
 };
 
+// Seconds to wait before re-running an issue whose every model was rate-limited.
+// Provider windows observed in practice: kimi ~1-2 min, gemini a few minutes.
+const RATE_LIMIT_WAIT_S = Number(process.env.RATE_LIMIT_WAIT_S ?? 90);
+
+// Is this failure "come back later" rather than "this is broken"? Providers say
+// it in their own words, so match on what they actually send.
+// ponytail: string matching, because the error crosses an Effect/CLI boundary
+// that drops the status code. A false positive costs one extra wait.
+const isRateLimited = (e: unknown) =>
+  /429|RESOURCE_EXHAUSTED|rate.?limit|quota|usage limit|too many requests/i.test(
+    (e as Error)?.message ?? String(e),
+  );
+
 // Models preflight found live on 9router (set by preflightModels()). Used to
 // skip a known-dead model in the fallback chain instead of wasting a run on it.
 let liveModels: Set<string> | null = null;
@@ -192,18 +205,45 @@ const implChain = (size: "small" | "large") => {
 // planning run only to have the implementer error "model may not exist".
 // ponytail: one GET before the loop beats a failed sandbox mid-run.
 const preflightModels = async () => {
-  let available: Set<string>;
+  const gateway = R9_URL.replace("host.docker.internal", "localhost");
+  let listed: Set<string>;
   try {
-    const res = await fetch(`${R9_URL.replace("host.docker.internal", "localhost")}/v1/models`, {
-      headers: { Authorization: `Bearer ${r9key()}` },
-    });
+    const res = await fetch(`${gateway}/v1/models`, { headers: { Authorization: `Bearer ${r9key()}` } });
     const body = (await res.json()) as { data?: Array<{ id: string }> };
-    available = new Set((body.data ?? []).map((m) => m.id));
+    listed = new Set((body.data ?? []).map((m) => m.id));
   } catch (e) {
     throw new Error(
       `Preflight failed: cannot reach 9router at ${R9_URL} (${(e as Error).message}). Is it running? Try: 9router`,
     );
   }
+
+  // Two checks, because each misses what the other catches. The listing catches
+  // an id that is wrong or retired. The ping catches an account that is listed
+  // but rate-limited or unauthorized — it answers 403/429 the moment an agent
+  // uses it, which reads as the agent failing, one wasted round per issue.
+  // A ping alone is not enough: the gateway happily returns 200 for a model id
+  // that doesn't exist, because the upstream provider accepts the name.
+  const ping = async (id: string) => {
+    if (!listed.has(id)) return "not on the gateway (check the id)";
+    try {
+      const res = await fetch(`${gateway}/v1/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${r9key()}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: id, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+      });
+      if (res.ok) return null;
+      const text = (await res.text()).replace(/\s+/g, " ").slice(0, 120);
+      return `${res.status} ${text}`;
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+
+  const wanted = [...new Set([modelFor("PLAN"), modelFor("REVIEW"), modelFor("MERGE"), IMPL_SMALL, IMPL_LARGE])];
+  const results = await Promise.all(wanted.map(async (id) => [id, await ping(id)] as const));
+  const failures = new Map(results.filter(([, err]) => err !== null) as Array<[string, string]>);
+  const available = new Set(results.filter(([, err]) => err === null).map(([id]) => id));
+  for (const [id, err] of failures) console.warn(`⚠ Preflight: ${id} answered ${err}`);
 
   // Hard requirement: the plan/review/merge models MUST be live — there's no
   // fallback for those phases, so a missing one aborts the run.
@@ -211,9 +251,10 @@ const preflightModels = async () => {
   const coreMissing = [...new Set(core)].filter((m) => !available.has(m));
   if (coreMissing.length > 0) {
     throw new Error(
-      `Preflight: required (plan/review/merge) models not on 9router: ${coreMissing.join(", ")}\n` +
-        `Available: ${[...available].sort().join(", ")}\n` +
-        `Fix MODEL_PLAN/REVIEW/MERGE in .sandcastle/.env or re-enable in 9router.`,
+      `Preflight: plan/review/merge models did not answer (no fallback for those phases):\n` +
+        coreMissing.map((m) => `  ${m} → ${failures.get(m)}`).join("\n") +
+        `\nAnswering: ${[...available].sort().join(", ") || "(none)"}\n` +
+        `Fix MODEL_PLAN/REVIEW/MERGE in .sandcastle/.env, or wait if that is a rate limit.`,
     );
   }
 
@@ -223,18 +264,18 @@ const preflightModels = async () => {
   // Kimi → all IMPL work flows to agy automatically).
   const smallOk = available.has(IMPL_SMALL);
   const largeOk = available.has(IMPL_LARGE);
-  if (!smallOk) console.warn(`⚠ Preflight: IMPL small model ${IMPL_SMALL} is offline — those jobs will fall back to ${IMPL_LARGE}.`);
-  if (!largeOk) console.warn(`⚠ Preflight: IMPL large model ${IMPL_LARGE} is offline — those jobs will fall back to ${IMPL_SMALL}.`);
+  if (!smallOk) console.warn(`⚠ Preflight: IMPL small ${IMPL_SMALL} not answering — those jobs fall back to ${IMPL_LARGE}.`);
+  if (!largeOk) console.warn(`⚠ Preflight: IMPL large ${IMPL_LARGE} not answering — those jobs fall back to ${IMPL_SMALL}.`);
   if (!smallOk && !largeOk) {
     throw new Error(
-      `Preflight: BOTH implementer models are offline (${IMPL_SMALL}, ${IMPL_LARGE}).\n` +
-        `Available: ${[...available].sort().join(", ")}\n` +
-        `Enable at least one in 9router, or point MODEL_IMPL_SMALL/LARGE at a live model.`,
+      `Preflight: neither implementer model answered:\n` +
+        `  ${IMPL_SMALL} → ${failures.get(IMPL_SMALL)}\n  ${IMPL_LARGE} → ${failures.get(IMPL_LARGE)}\n` +
+        `Enable at least one, point MODEL_IMPL_SMALL/LARGE at a live model, or wait out the rate limit.`,
     );
   }
 
   const liveList = [...new Set([...core, IMPL_SMALL, IMPL_LARGE])].filter((m) => available.has(m));
-  console.log(`Preflight OK — live on 9router: ${liveList.join(", ")}`);
+  console.log(`Preflight OK — answering: ${liveList.join(", ")}`);
   return available;
 };
 
@@ -246,6 +287,12 @@ const preflightModels = async () => {
 // sees ANTHROPIC_BASE_URL and errors "model may not exist".
 // ponytail: sandbox env = the only spot createSandbox actually forwards.
 const STORE = "/home/agent/pnpm-store";
+// What the sandbox runs once, before the agent starts, to make the repo
+// buildable. pnpm by default because that's what the shipped Dockerfile
+// installs; an npm/yarn/bun project overrides it in .env rather than editing
+// this file, which a harness re-sync would overwrite.
+const INSTALL_CMD =
+  process.env.INSTALL_CMD ?? `${CD_WS}pnpm config set store-dir ${STORE} && pnpm install`;
 const dockerWithStore = () =>
   docker({
     mounts: [{ hostPath: ".sandcastle/pnpm-store", sandboxPath: STORE }],
@@ -257,7 +304,7 @@ const hooks = {
   sandbox: {
     onSandboxReady: [
       {
-        command: `${CD_WS}pnpm config set store-dir ${STORE} && pnpm install`,
+        command: INSTALL_CMD,
         timeoutMs: 300_000,
       },
     ],
@@ -409,6 +456,14 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
           | Awaited<ReturnType<typeof sandbox.run>>
           | undefined;
         let lastErr: unknown;
+        // A provider rate limit is not a dead model — the windows are short
+        // (minutes). Losing a whole issue to one is pure waste, so when every
+        // model in the chain is rate-limited we wait once and run it again.
+        for (let pass = 0; pass < 2 && !implement; pass++) {
+          if (pass > 0) {
+            console.warn(`  ⏳ ${issue.id}: every model rate-limited — waiting ${RATE_LIMIT_WAIT_S}s and retrying once`);
+            await new Promise((r) => setTimeout(r, RATE_LIMIT_WAIT_S * 1000));
+          }
         for (const model of chain) {
           try {
             implement = await sandbox.run({
@@ -436,6 +491,10 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             lastErr = e;
             console.warn(`  ⚠ ${issue.id}: implementer on ${model} threw (${(e as Error).message}); trying next model`);
           }
+        }
+          // Only the rate-limit case earns the second pass. Anything else will
+          // fail exactly the same way in 90 seconds.
+          if (!implement && !isRateLimited(lastErr)) break;
         }
         if (!implement) throw lastErr ?? new Error(`all impl models failed for ${issue.id}`);
 
