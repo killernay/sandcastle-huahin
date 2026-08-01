@@ -2,9 +2,10 @@
 // 9router right now, and is every {{PLACEHOLDER}} in the prompts actually wired
 // up in main.mts? Run before a real run to avoid burning tokens on a dead model
 // id or an unwired prompt arg.  Usage: npx tsx .sandcastle/check-models.mts
+import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 for (const line of (() => {
   try { return readFileSync(join(process.cwd(), ".sandcastle", ".env"), "utf8").split("\n"); }
@@ -78,6 +79,23 @@ console.log(`MERGE          ${MERGE.padEnd(26)} ${reachable ? live(MERGE) : "?"}
 console.log("─".repeat(62));
 console.log(`9router key: ${r9key() ? "present ✓" : "MISSING ✗"}   reachable: ${reachable ? "yes ✓" : "NO ✗"}`);
 
+// The sandbox image. The library derives the tag from the repo dir name
+// (lowercase, anything outside [a-z0-9_.-] → "-") and only errors at the first
+// container create — AFTER the planner has already started. Catch it here.
+const IMAGE = `sandcastle:${basename(process.cwd()).toLowerCase().replace(/[^a-z0-9_.-]/g, "-") || "local"}`;
+let imageProblem = "";
+try {
+  execSync(`docker image inspect ${IMAGE}`, { stdio: "ignore" });
+} catch {
+  try {
+    execSync("docker info", { stdio: "ignore" });
+    imageProblem = `MISSING ✗ — build it: npx sandcastle docker build-image`;
+  } catch {
+    imageProblem = "docker daemon not running ✗";
+  }
+}
+console.log(`Sandbox img: ${IMAGE} ${imageProblem || "present ✓"}`);
+
 // Prompt wiring: the library HARD-FAILS a run when a prompt references a
 // {{PLACEHOLDER}} that main.mts never passes ("Prompt argument … has no
 // matching value"), and that throw lands deep inside the per-issue retry, where
@@ -116,6 +134,7 @@ const implLive = [IMPL_SMALL, IMPL_LARGE].filter((m) => usable(m));
 if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
 if (overridden.length) { console.error(`FAIL: built-in prompt args passed by main.mts: ${[...new Set(overridden)].join(", ")} — the library supplies these; passing one throws.`); process.exit(1); }
 if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }
+if (imageProblem) { console.error(`FAIL: sandbox image ${IMAGE} — ${imageProblem}`); process.exit(1); }
 if (coreMissing.length) { console.error(`FAIL: plan/review/merge models not on 9router (no fallback for those): ${coreMissing.join(", ")}`); process.exit(1); }
 if (implLive.length === 0) { console.error(`FAIL: both implementer models are offline: ${IMPL_SMALL}, ${IMPL_LARGE}`); process.exit(1); }
 if (implLive.length === 1) { console.warn(`⚠ one implementer tier is offline — all IMPL work will run on ${implLive[0]}`); }

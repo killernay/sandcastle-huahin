@@ -41,11 +41,14 @@ $EDITOR .sandcastle/.env          # set WORKSPACE_DIR, ISSUE_LABEL, GH_TOKEN, �
 npm pkg set scripts.sandcastle="tsx .sandcastle/main.mts"
 npm install -D @ai-hero/sandcastle tsx zod
 
-# 4. Make sure 9router is running, then verify models are live
+# 4. Build the sandbox image (once per repo — the tag comes from the dir name)
+npx sandcastle docker build-image
+
+# 5. Make sure 9router is running, then verify models + image
 9router &
 npx tsx .sandcastle/check-models.mts
 
-# 5. Run (AFK — survives terminal close). ONE run per repo — see Monitoring.
+# 6. Run (AFK — survives terminal close). ONE run per repo — see Monitoring.
 nohup npm run sandcastle > .sandcastle/run.log 2>&1 &
 tail -f .sandcastle/run.log
 ```

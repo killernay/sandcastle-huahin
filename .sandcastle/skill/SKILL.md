@@ -45,7 +45,7 @@ D=$(grep -m1 "^DEP_ORDER_FILE=" .sandcastle/.env | cut -d= -f2); [ -z "$D" ] || 
 L=$(grep -m1 "^ISSUE_LABEL=" .sandcastle/.env | cut -d= -f2); L=${L:-ready-for-agent}
 gh label list --search "$L" | head -3; gh issue list --state open --label "$L" --limit 5
 
-# 9. models live + prompt args wired + no built-in overridden
+# 9. models live + sandbox image built + prompt args wired + no built-in overridden
 npx tsx .sandcastle/check-models.mts
 
 # 10. how many runs are live — ONE line per run, 0 before you start another
@@ -61,8 +61,8 @@ for w in .sandcastle/worktrees/*/; do [ -d "$w" ] && git -C "$w" status --porcel
 Count runs with the `[t]sx` pattern, not `main.mts` — one run is two processes
 (the tsx wrapper and its node child), so a looser grep reads as two runs.
 
-Check 9 covers models, `{{PLACEHOLDER}}`s no one passes, and built-in args being
-passed. Read its output rather than re-deriving it.
+Check 9 covers models, the sandbox image, `{{PLACEHOLDER}}`s no one passes, and
+built-in args being passed. Read its output rather than re-deriving it.
 
 ## Three slots — the only project-specific config
 
@@ -88,6 +88,7 @@ npx degit killernay/sandcastle-huahin/.sandcastle .sandcastle
 cp .sandcastle/.env.example .sandcastle/.env
 npm i -D @ai-hero/sandcastle tsx zod
 npm pkg set scripts.sandcastle="tsx .sandcastle/main.mts"
+npx sandcastle docker build-image
 mkdir -p .claude/skills && ln -s ../../.sandcastle/skill .claude/skills/sandcastle
 ```
 
