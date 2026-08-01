@@ -3,7 +3,7 @@
 // up in main.mts? Run before a real run to avoid burning tokens on a dead model
 // id or an unwired prompt arg.  Usage: npx tsx .sandcastle/check-models.mts
 import { execSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -79,22 +79,66 @@ console.log(`MERGE          ${MERGE.padEnd(26)} ${reachable ? live(MERGE) : "?"}
 console.log("─".repeat(62));
 console.log(`9router key: ${r9key() ? "present ✓" : "MISSING ✗"}   reachable: ${reachable ? "yes ✓" : "NO ✗"}`);
 
-// The sandbox image. The library derives the tag from the repo dir name
-// (lowercase, anything outside [a-z0-9_.-] → "-") and only errors at the first
-// container create — AFTER the planner has already started. Catch it here.
+// The sandbox image (SANDBOX=docker only). The library derives the tag from
+// the repo dir name (lowercase, anything outside [a-z0-9_.-] → "-") and only
+// errors at the first container create — AFTER the planner already started.
+// Catch it here. SANDBOX=none runs on the host: no image, but permission
+// prompts stay live — an AFK run hangs on the first unapproved tool call.
+const SANDBOX = process.env.SANDBOX ?? "docker";
 const IMAGE = `sandcastle:${basename(process.cwd()).toLowerCase().replace(/[^a-z0-9_.-]/g, "-") || "local"}`;
-let imageProblem = "";
-try {
-  execSync(`docker image inspect ${IMAGE}`, { stdio: "ignore" });
-} catch {
+let sandboxProblem = "";
+if (SANDBOX === "docker") {
   try {
-    execSync("docker info", { stdio: "ignore" });
-    imageProblem = `MISSING ✗ — build it: npx sandcastle docker build-image`;
+    execSync(`docker image inspect ${IMAGE}`, { stdio: "ignore" });
   } catch {
-    imageProblem = "docker daemon not running ✗";
+    try {
+      execSync("docker info", { stdio: "ignore" });
+      sandboxProblem = `image ${IMAGE} MISSING ✗ — build it: npx sandcastle docker build-image`;
+    } catch {
+      sandboxProblem = "docker daemon not running ✗";
+    }
+  }
+  console.log(`Sandbox img: ${IMAGE} ${sandboxProblem ? "✗" : "present ✓"}`);
+} else if (SANDBOX === "none") {
+  console.log("Sandbox:     none — agents run on the host (no image; pre-allowlist permissions or a nohup run hangs)");
+} else {
+  sandboxProblem = `SANDBOX must be "docker" or "none", got "${SANDBOX}" ✗`;
+  console.log(`Sandbox:     ${sandboxProblem}`);
+}
+
+// GH_TOKEN vs THIS repo. A fine-grained PAT is scoped per-repo: one minted for
+// another project authenticates fine but 404s here — and that surfaces as
+// "Could not resolve to a Repository" deep inside the planner's first gh call,
+// not at startup. Ask the API up front.
+// ponytail: repo parse breaks on dots in repo names; none of ours have them.
+let ghProblem = "";
+let ghRepo = "";
+const ISSUE_SOURCE = process.env.ISSUE_SOURCE ?? "github";
+if (ISSUE_SOURCE === "github" && process.env.GH_TOKEN) {
+  try {
+    const url = execSync("git remote get-url origin", { encoding: "utf8" }).trim();
+    ghRepo = url.match(/github\.com[:/]([^/]+\/[^/.]+)/)?.[1] ?? "";
+    if (ghRepo) execSync(`gh api repos/${ghRepo}`, { stdio: "ignore" });
+  } catch {
+    ghProblem = `can't see ${ghRepo} ✗ — grant this repo to the fine-grained PAT (or mint one: Issues R/W + Metadata R)`;
   }
 }
-console.log(`Sandbox img: ${IMAGE} ${imageProblem || "present ✓"}`);
+if (ISSUE_SOURCE === "github") {
+  console.log(`GH token:    ${process.env.GH_TOKEN ? ghProblem || `sees ${ghRepo} ✓` : "not set — gh keychain auth"}`);
+} else if (ISSUE_SOURCE === "local") {
+  // Local mode never touches GitHub — the count is the only thing worth knowing.
+  const n = (() => {
+    try {
+      return readdirSync(join(process.cwd(), ".sandcastle", "issues")).filter((f) => f.endsWith(".md")).length;
+    } catch {
+      return 0;
+    }
+  })();
+  console.log(`Issues:      local — ${n} open file(s) in .sandcastle/issues/${n === 0 ? " ⚠ planner will find nothing to do" : ""}`);
+} else {
+  ghProblem = `ISSUE_SOURCE must be "github" or "local", got "${ISSUE_SOURCE}" ✗`;
+  console.log(`Issues:      ${ghProblem}`);
+}
 
 // Prompt wiring: the library HARD-FAILS a run when a prompt references a
 // {{PLACEHOLDER}} that main.mts never passes ("Prompt argument … has no
@@ -134,7 +178,8 @@ const implLive = [IMPL_SMALL, IMPL_LARGE].filter((m) => usable(m));
 if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
 if (overridden.length) { console.error(`FAIL: built-in prompt args passed by main.mts: ${[...new Set(overridden)].join(", ")} — the library supplies these; passing one throws.`); process.exit(1); }
 if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }
-if (imageProblem) { console.error(`FAIL: sandbox image ${IMAGE} — ${imageProblem}`); process.exit(1); }
+if (sandboxProblem) { console.error(`FAIL: sandbox — ${sandboxProblem}`); process.exit(1); }
+if (ghProblem) { console.error(`FAIL: issues — ${ghProblem}`); process.exit(1); }
 if (coreMissing.length) { console.error(`FAIL: plan/review/merge models not on 9router (no fallback for those): ${coreMissing.join(", ")}`); process.exit(1); }
 if (implLive.length === 0) { console.error(`FAIL: both implementer models are offline: ${IMPL_SMALL}, ${IMPL_LARGE}`); process.exit(1); }
 if (implLive.length === 1) { console.warn(`⚠ one implementer tier is offline — all IMPL work will run on ${implLive[0]}`); }

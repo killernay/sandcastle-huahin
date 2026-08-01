@@ -23,6 +23,7 @@
 
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { execSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -72,10 +73,24 @@ for (const line of (() => {
   }
 }
 
-// 9router runs on the host; containers reach it via host.docker.internal.
+// ── Sandbox choice (set SANDBOX in .sandcastle/.env) ─────────────────────────
+// docker (default): agents run isolated in the sandcastle image — build it
+//   once per repo with `npx sandcastle docker build-image`.
+// none: agents run straight on the host. No Docker needed, but NO isolation,
+//   and the agent keeps its normal permission prompts — under nohup an
+//   unapproved tool call HANGS the run silently. Pre-allowlist what the agent
+//   needs in .claude/settings.json before going AFK on this.
+const SANDBOX = process.env.SANDBOX ?? "docker";
+if (SANDBOX !== "docker" && SANDBOX !== "none")
+  throw new Error(`SANDBOX must be "docker" or "none", got "${SANDBOX}"`);
+
+// 9router runs on the host; containers reach it via host.docker.internal,
+// host-run agents (SANDBOX=none) via localhost.
 // Everything routes through 9router — the user's subscription licenses live
 // there, so all models (claude/gemini/kimi) are covered with no per-token cost.
-const R9_URL = process.env.R9_URL ?? "http://host.docker.internal:20128";
+const R9_URL =
+  process.env.R9_URL ??
+  (SANDBOX === "none" ? "http://localhost:20128" : "http://host.docker.internal:20128");
 const r9key = () => {
   try {
     return readFileSync(join(homedir(), ".9router/auth/cli-secret"), "utf8").trim();
@@ -106,6 +121,12 @@ const CD_WS = WORKSPACE_DIR ? `cd ${WORKSPACE_DIR} && ` : "";
 // GitHub label the planner filters open issues by (your "ready for the agent"
 // signal). Defaults to "ready-for-agent".
 const ISSUE_LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
+// Where the planner gets its issues (formats live in list-issues.mts):
+// github (default) = gh issue list by ISSUE_LABEL; local = .sandcastle/issues/*.md,
+// no GitHub or GH_TOKEN involved at all.
+const ISSUE_SOURCE = process.env.ISSUE_SOURCE ?? "github";
+if (ISSUE_SOURCE !== "github" && ISSUE_SOURCE !== "local")
+  throw new Error(`ISSUE_SOURCE must be "github" or "local", got "${ISSUE_SOURCE}"`);
 // Optional file holding the authoritative dependency/build order (e.g. a
 // sprint-status.yaml or roadmap doc). Empty = no such file; the planner then
 // orders by issue body/labels alone.
@@ -292,8 +313,15 @@ const STORE = "/home/agent/pnpm-store";
 // installs; an npm/yarn/bun project overrides it in .env rather than editing
 // this file, which a harness re-sync would overwrite.
 const INSTALL_CMD =
-  process.env.INSTALL_CMD ?? `${CD_WS}pnpm config set store-dir ${STORE} && pnpm install`;
-const dockerWithStore = () => {
+  process.env.INSTALL_CMD ??
+  (SANDBOX === "none"
+    ? // The host keeps its own pnpm store — rewiring store-dir here would
+      // mutate the user's global pnpm config.
+      `${CD_WS}pnpm install`
+    : `${CD_WS}pnpm config set store-dir ${STORE} && pnpm install`);
+const makeSandbox = () => {
+  if (SANDBOX === "none")
+    return noSandbox({ env: { ANTHROPIC_BASE_URL: R9_URL, ANTHROPIC_API_KEY: r9key() } });
   // The store is gitignored, so a fresh install has no dir yet — and docker
   // refuses to mount a hostPath that doesn't exist.
   mkdirSync(".sandcastle/pnpm-store", { recursive: true });
@@ -321,7 +349,7 @@ const hooks = {
 const copyToWorktree: string[] = [];
 
 // Build a claudeCode agent. 9router env is NOT set here (createSandbox drops
-// agent env) — it rides on dockerWithStore(model) instead. This just picks the
+// agent env) — it rides on makeSandbox() instead. This just picks the
 // model id and CLI. Used for PLAN/REVIEW/MERGE; IMPL uses implChain(size).
 const agent = (model: string) => sandcastle.claudeCode(model);
 
@@ -384,7 +412,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   const plan = await sandcastle.run({
     hooks,
-    sandbox: dockerWithStore(),
+    sandbox: makeSandbox(),
     name: "planner",
     // One iteration is enough: the planner just needs to read and reason,
     // not write code. (Structured output requires maxIterations: 1.)
@@ -447,7 +475,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     issues.map(async (issue) => {
       const sandbox = await sandcastle.createSandbox({
         branch: issue.branch,
-        sandbox: dockerWithStore(),
+        sandbox: makeSandbox(),
         hooks,
         copyToWorktree,
       });
@@ -596,7 +624,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // -------------------------------------------------------------------------
   await sandcastle.run({
     hooks,
-    sandbox: dockerWithStore(),
+    sandbox: makeSandbox(),
     name: "merger",
     maxIterations: 1,
     agent: agent(modelFor("MERGE")),
@@ -606,6 +634,13 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
       // A markdown list of issue IDs and titles, one per line.
       ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
+      // How the merger marks an issue done. For local issues the git mv rides
+      // the merge commit back to the host repo — that IS the "closed" state.
+      CLOSE_CMD:
+        ISSUE_SOURCE === "local"
+          ? "`mkdir -p .sandcastle/issues/done && git mv .sandcastle/issues/<ID>.md " +
+            ".sandcastle/issues/done/<ID>.md` — include this move in your merge commit"
+          : '`gh issue close <ID> --comment "Completed by Sandcastle"`',
       WORKSPACE_HINT,
       // Tell the merger to write completed stories back to the dep-order file so
       // the next planning round doesn't treat finished work as pending. Only when

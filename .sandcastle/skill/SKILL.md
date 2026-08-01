@@ -41,9 +41,12 @@ test -f .sandcastle/planning-rules.md
 # 7. DEP_ORDER_FILE, if set, must exist
 D=$(grep -m1 "^DEP_ORDER_FILE=" .sandcastle/.env | cut -d= -f2); [ -z "$D" ] || ls "$D"
 
-# 8. the label exists and has open issues
-L=$(grep -m1 "^ISSUE_LABEL=" .sandcastle/.env | cut -d= -f2); L=${L:-ready-for-agent}
-gh label list --search "$L" | head -3; gh issue list --state open --label "$L" --limit 5
+# 8. issues exist — github: the label has open issues; local: issue files present
+S=$(grep -m1 "^ISSUE_SOURCE=" .sandcastle/.env | cut -d= -f2); S=${S:-github}
+if [ "$S" = "local" ]; then ls .sandcastle/issues/*.md; else
+  L=$(grep -m1 "^ISSUE_LABEL=" .sandcastle/.env | cut -d= -f2); L=${L:-ready-for-agent}
+  gh label list --search "$L" | head -3; gh issue list --state open --label "$L" --limit 5
+fi
 
 # 9. models live + sandbox image built + prompt args wired + no built-in overridden
 npx tsx .sandcastle/check-models.mts
@@ -88,12 +91,23 @@ npx degit killernay/sandcastle-huahin/.sandcastle .sandcastle
 cp .sandcastle/.env.example .sandcastle/.env
 npm i -D @ai-hero/sandcastle tsx zod
 npm pkg set scripts.sandcastle="tsx .sandcastle/main.mts"
-npx sandcastle docker build-image
+npx sandcastle docker build-image        # skip if SANDBOX=none
 mkdir -p .claude/skills && ln -s ../../.sandcastle/skill .claude/skills/sandcastle
 ```
 
 Then fill the three slots (interview the user — do not invent epics, labels or
-script names), and finish with CHECK. Only when CHECK is clean:
+script names), and ask two mode questions:
+
+- **Sandbox:** `SANDBOX=docker` (default — isolated, image built once per repo)
+  or `SANDBOX=none` (host — no Docker and no isolation; permission prompts stay
+  live, so pre-allowlist the agent's tools in `.claude/settings.json` or an AFK
+  run hangs on the first prompt).
+- **Issue source:** `ISSUE_SOURCE=github` (default — open issues by
+  `ISSUE_LABEL`, needs `GH_TOKEN`) or `ISSUE_SOURCE=local` (one `.md` per issue
+  in `.sandcastle/issues/`, no GitHub at all — see the README's "Local issues"
+  section for the file format).
+
+Finish with CHECK. Only when CHECK is clean:
 
 ```bash
 9router &                                              # the gateway must be up

@@ -4,7 +4,7 @@ Open issues labelled {{ISSUE_LABEL}} (already filtered to work-ready):
 
 <issues-json>
 
-!`gh issue list --state open --label {{ISSUE_LABEL}} --limit 100 --json number,title,body,labels --jq '[.[] | {number, title, body, labels: [.labels[].name]}]'`
+!`npx tsx .sandcastle/list-issues.mts`
 
 </issues-json>
 

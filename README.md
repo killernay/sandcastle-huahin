@@ -41,7 +41,8 @@ $EDITOR .sandcastle/.env          # set WORKSPACE_DIR, ISSUE_LABEL, GH_TOKEN, �
 npm pkg set scripts.sandcastle="tsx .sandcastle/main.mts"
 npm install -D @ai-hero/sandcastle tsx zod
 
-# 4. Build the sandbox image (once per repo — the tag comes from the dir name)
+# 4. Build the sandbox image (once per repo — the tag comes from the dir name).
+#    Skip if you set SANDBOX=none in .env (host mode: no isolation — see table).
 npx sandcastle docker build-image
 
 # 5. Make sure 9router is running, then verify models + image
@@ -133,12 +134,35 @@ unless you want the next run to rebuild from the `Dockerfile`.
 | `INSTALL_CMD` | What the sandbox runs to make the repo buildable | pnpm install |
 | `RATE_LIMIT_WAIT_S` | Pause before retrying an issue whose models were all rate-limited | `90` |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
+| `SANDBOX` | `docker` = isolated image; `none` = on the host — no isolation, and permission prompts stay live (pre-allowlist in `.claude/settings.json` or an AFK run hangs) | `docker` |
+| `ISSUE_SOURCE` | `github` = open issues by `ISSUE_LABEL`; `local` = files in `.sandcastle/issues/` — no GitHub or `GH_TOKEN` needed | `github` |
 | `MODEL_PLAN` | Planner (reasoning) model | `cc/claude-fable-5` |
 | `MODEL_REVIEW/MERGE` | QC models | `cc/claude-opus-5` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |
 | `MODEL_IMPL_LARGE` | Strong model for hard issues | `kimi/kimi-k3` |
 
 See `.sandcastle/MODELS.md` for the full routing guide.
+
+## Local issues — run without GitHub
+
+Set `ISSUE_SOURCE=local` in `.sandcastle/.env` and write one markdown file per
+issue in `.sandcastle/issues/`:
+
+```
+.sandcastle/issues/
+  T01-schema.md        # first line = title, rest = body
+  T02-auth.md
+  done/                # the merger moves finished issues here
+```
+
+- The filename stem is the issue id — keep it branch-safe (letters, digits,
+  dashes): the work branch becomes `sandcastle/issue-T01-schema`.
+- The planner reads the files exactly like GitHub issues. There are no labels
+  in this mode, so `blocked`/`deferred` knowledge goes in `planning-rules.md`
+  or the `DEP_ORDER_FILE` instead.
+- "Closing" an issue = the merger `git mv`s its file into
+  `.sandcastle/issues/done/` inside the merge commit.
+- `GH_TOKEN` is not needed; nothing touches GitHub.
 
 ## `/sandcastle` — check an install, or set one up
 
