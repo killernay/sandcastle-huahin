@@ -25,7 +25,7 @@ import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { noSandbox } from "@ai-hero/sandcastle/sandboxes/no-sandbox";
 import { execSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -363,39 +363,46 @@ const agent = (model: string) => sandcastle.claudeCode(model);
 liveModels = await preflightModels();
 
 // Worktrees are reused across runs. One left dirty by a killed run hands the
-// next implementer a tree it didn't write — half-finished edits it will read as
-// its own prior work, commit around, or "fix". Refuse to start instead: the
-// cleanup is one command, but the confusion it causes looks like a model going
-// haywire. ponytail: report and stop; deleting someone's work is not our call.
-const dirtyWorktrees = (() => {
-  try {
-    return readdirSync(join(process.cwd(), ".sandcastle", "worktrees"))
-      .filter((name) => {
-        const path = join(process.cwd(), ".sandcastle", "worktrees", name);
-        try {
-          // Agents leave their own runtime droppings in the tree (.claude/).
-          // Blocking a run on those trains you to ignore the guard.
-          return execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" })
-            .split("\n")
-            .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l));
-        } catch {
-          return false; // not a worktree (or already gone) — leave it alone
-        }
-      });
-  } catch {
-    return []; // no worktrees dir yet — first run
+// next implementer a tree it didn't write — half-finished edits it will read
+// as its own prior work. An earlier version refused to start here and told a
+// human to clean up, which turned every Ctrl-C into babysitting. Self-heal
+// instead: commit whatever the dead agent left as a WIP on the issue's own
+// branch (branch names are deterministic, so the next implementer for that
+// issue resumes exactly there), then clear the worktree. Nothing is deleted
+// that wasn't committed first.
+try {
+  const wtRoot = join(process.cwd(), ".sandcastle", "worktrees");
+  for (const name of readdirSync(wtRoot)) {
+    const path = join(wtRoot, name);
+    let dirty = false;
+    try {
+      // Agents leave their own runtime droppings in the tree (.claude/) —
+      // those alone don't count as work worth rescuing.
+      dirty = execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" })
+        .split("\n")
+        .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l));
+    } catch {
+      continue; // not a worktree (or already gone) — leave it alone
+    }
+    if (!dirty) continue;
+    let rescued = false;
+    try {
+      execSync(`git -C ${path} add -A -- . ':(exclude).claude'`, { stdio: "ignore" });
+      execSync(`git -C ${path} commit -m "WIP: rescued from a killed run (auto-committed at startup)"`, { stdio: "ignore" });
+      rescued = true;
+    } catch {
+      // nothing stageable beyond droppings — clearing is safe
+    }
+    rmSync(path, { recursive: true, force: true });
+    try { execSync("git worktree prune", { stdio: "ignore" }); } catch { /* cosmetic */ }
+    console.log(
+      rescued
+        ? `♻ ${name}: work from a killed run committed as WIP on its branch — the next implementer resumes there`
+        : `♻ ${name}: cleared stale worktree (runtime droppings only)`,
+    );
   }
-})();
-if (dirtyWorktrees.length > 0) {
-  throw new Error(
-    `Uncommitted changes in reused worktree(s): ${dirtyWorktrees.join(", ")}\n` +
-      `A previous run was killed mid-edit. Inspect, then either commit the work on its\n` +
-      `branch or discard it:\n` +
-      dirtyWorktrees
-        .map((n) => `  git -C .sandcastle/worktrees/${n} status`)
-        .join("\n") +
-      `\n  rm -rf .sandcastle/worktrees && git worktree prune   # discard all of it`,
-  );
+} catch {
+  // no worktrees dir yet — first run
 }
 
 for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {

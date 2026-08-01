@@ -112,7 +112,7 @@ if (runCount === 0) {
         .split("\n")
         .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l)),
     );
-    if (dirty.length > 0) problems.push(`worktree(s) left dirty by a stopped run: ${dirty.join(", ")} — the next start will refuse until you clear them`);
+    if (dirty.length > 0) problems.push(`worktree(s) left dirty by a stopped run: ${dirty.join(", ")} — the next start auto-rescues them (WIP commit on the issue branch, then clears)`);
   } catch {}
 }
 

@@ -57,7 +57,7 @@ ps -eo pid,lstart,command | grep "[.]sandcastle/main[.]mts"
 # 11. containers: 2 per issue in flight is normal; only non-zero with NO run live is a leak
 docker ps -a --filter name=sandcastle -q | wc -l
 
-# 12. worktrees left dirty by a killed run — the next implementer would inherit them
+# 12. worktrees left dirty by a killed run — startup auto-rescues these (WIP commit on the issue branch, then clears); listed here so you know a kill happened
 for w in .sandcastle/worktrees/*/; do [ -d "$w" ] && git -C "$w" status --porcelain | head -3; done
 ```
 

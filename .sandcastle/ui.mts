@@ -399,6 +399,7 @@ const HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
          cursor:pointer}
   .chipm.bad{border-color:var(--color-critical);color:var(--color-critical)}
   .chipm.off{opacity:.4;text-decoration:line-through}
+  .chipm.dim{opacity:.45;cursor:default}
   .chipm:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
   .r9feed{height:280px}
   .ok{color:var(--color-good);flex:none} .err{color:var(--color-critical);flex:none}
@@ -554,11 +555,16 @@ async function tick(){
   const r9box = document.getElementById("r9-box");
   if (s.r9) {
     r9box.hidden = false;
-    document.getElementById("r9-chips").innerHTML = s.r9.byModel.map((m) =>
+    // one-off test calls (1 call, no errors) fold into a single dim chip —
+    // they age out of the hour window on their own and don't deserve real estate
+    const major = s.r9.byModel.filter((m) => m.calls >= 2 || m.errors > 0);
+    const minor = s.r9.byModel.filter((m) => m.calls < 2 && m.errors === 0);
+    document.getElementById("r9-chips").innerHTML = (major.map((m) =>
       '<button class="chipm' + (m.errors > 0 ? " bad" : "") + (hiddenM.has(m.model) ? " off" : "") +
       '" data-m="' + esc(m.model) + '" aria-pressed="' + !hiddenM.has(m.model) + '">' +
       esc(m.model) + " · " + m.calls + " calls" +
-      (m.errors > 0 ? " · " + m.errors + " err" + (m.rate429 > 0 ? " (" + m.rate429 + "×429)" : "") : "") + "</button>").join("")
+      (m.errors > 0 ? " · " + m.errors + " err" + (m.rate429 > 0 ? " (" + m.rate429 + "×429)" : "") : "") + "</button>").join("") +
+      (minor.length ? '<span class="chipm dim">+' + minor.length + " × 1-call tests</span>" : ""))
       || '<span class="chipm">no calls in the last hour</span>';
     const xb = document.getElementById("r9-expand");
     xb.textContent = r9All ? "collapse all" : "expand all";
