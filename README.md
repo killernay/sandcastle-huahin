@@ -56,6 +56,16 @@ tail -f .sandcastle/run.log
 
 ## Monitoring a run
 
+A local web dashboard — status tiles, every log pane, issues and branches on
+one responsive page. It reads only logs/git/docker (zero model calls) and
+binds to localhost only:
+
+```bash
+npx tsx .sandcastle/ui.mts                    # → http://localhost:7717  (UI_PORT to change)
+UI_HOST=0.0.0.0 npx tsx .sandcastle/ui.mts    # reachable over Tailscale/LAN — private
+                                              # tailnets only; it serves your logs
+```
+
 The fast answer, before you read any log:
 
 ```bash

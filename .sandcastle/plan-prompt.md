@@ -45,6 +45,8 @@ Also judge each issue's **difficulty** and set `size`:
 - `"large"` — a new subsystem, non-trivial schema or migration design, security/
   permission logic, an algorithm, cross-cutting refactors, or anything with
   tricky edge cases. When unsure between the two, pick `"large"`.
+- A `size:small` or `size:large` label on the issue **overrides your judgement**
+  — a human pinned it deliberately.
 
 The size routes the implementer model (small → a fast model, large → a stronger
 one), so be honest: over-calling `small` on hard work produces weak code.

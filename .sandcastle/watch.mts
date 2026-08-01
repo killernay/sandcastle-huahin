@@ -36,9 +36,12 @@ const notes: string[] = [];
 // ponytail: counts loops host-wide, not per repo — a second project running its
 // own harness reads as a duplicate here. Confirm with the pid list before
 // killing anything; matching each pid's cwd needs lsof and isn't worth it.
-const runs = sh(`ps -eo pid,command | grep "[t]sx .sandcastle/main.mts" | wc -l`);
-const runCount = Number(runs || 0);
-if (runCount > 1) problems.push(`${runCount} loops running host-wide — if more than one is in THIS repo they will delete each other's worktrees. Check: ps -eo pid,lstart,command | grep "[t]sx .sandcastle/main.mts"`);
+// tsx re-execs itself as `node …/tsx/dist/cli.mjs .sandcastle/main.mts`, so the
+// command line never contains "tsx .sandcastle" — match the script path
+// instead. One run = TWO matching processes (cli wrapper + loader child).
+const runs = sh(`ps -eo pid,command | grep "[.]sandcastle/main[.]mts" | wc -l`);
+const runCount = Math.ceil(Number(runs || 0) / 2);
+if (runCount > 1) problems.push(`${runCount} loops running host-wide — if more than one is in THIS repo they will delete each other's worktrees. Check: ps -eo pid,lstart,command | grep "[.]sandcastle/main[.]mts"`);
 
 const log = (() => {
   try {

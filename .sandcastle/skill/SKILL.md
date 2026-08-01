@@ -51,8 +51,8 @@ fi
 # 9. models live + sandbox image built + prompt args wired + no built-in overridden
 npx tsx .sandcastle/check-models.mts
 
-# 10. how many runs are live — ONE line per run, 0 before you start another
-ps -eo pid,lstart,command | grep "[t]sx .sandcastle/main.mts"
+# 10. how many runs are live — TWO lines per run, 0 before you start another
+ps -eo pid,lstart,command | grep "[.]sandcastle/main[.]mts"
 
 # 11. containers: 2 per issue in flight is normal; only non-zero with NO run live is a leak
 docker ps -a --filter name=sandcastle -q | wc -l
@@ -61,8 +61,10 @@ docker ps -a --filter name=sandcastle -q | wc -l
 for w in .sandcastle/worktrees/*/; do [ -d "$w" ] && git -C "$w" status --porcelain | head -3; done
 ```
 
-Count runs with the `[t]sx` pattern, not `main.mts` — one run is two processes
-(the tsx wrapper and its node child), so a looser grep reads as two runs.
+Count runs with the `[.]sandcastle/main[.]mts` pattern — NOT `tsx`: tsx
+re-execs itself as `node …/tsx/dist/cli.mjs .sandcastle/main.mts`, so a "tsx"
+pattern matches nothing and every liveness check built on it reads a healthy
+run as dead. One run = two matching lines (cli wrapper + loader child).
 
 Check 9 covers models, the sandbox image, `{{PLACEHOLDER}}`s no one passes, and
 built-in args being passed. Read its output rather than re-deriving it.
@@ -122,8 +124,8 @@ with "the cwd was deleted", commits go uncounted, and both write the same
 `run.log`. Check 10 must be empty before starting. To stop a run:
 
 ```bash
-pkill -f "tsx .sandcastle/main.mts"
-ps -eo pid,command | grep "[t]sx .sandcastle/main.mts"   # expect nothing
+pkill -f "[.]sandcastle/main[.]mts"
+ps -eo pid,command | grep "[.]sandcastle/main[.]mts"   # expect nothing
 docker ps -a --filter name=sandcastle -q | wc -l         # expect 0; sandcastle cleans up after itself
 ```
 
@@ -153,6 +155,7 @@ The glob expands once — re-run it when a new `[implementer] Started` appears.
 ```bash
 npx tsx .sandcastle/watch.mts                                   # one verdict, exit 1 if unhealthy
 while :; do npx tsx .sandcastle/watch.mts; sleep 300; done      # every 5 min
+npx tsx .sandcastle/ui.mts                # web dashboard → http://localhost:7717, zero model calls
 ```
 
 It reads the run log, git, `ps` and `docker` and reports the failures that are
