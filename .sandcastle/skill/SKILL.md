@@ -69,6 +69,21 @@ run as dead. One run = two matching lines (cli wrapper + loader child).
 Check 9 covers models, the sandbox image, `{{PLACEHOLDER}}`s no one passes, and
 built-in args being passed. Read its output rather than re-deriving it.
 
+## Label semantics (github mode) — get these wrong and the loop lies
+
+| Label | Means | Who manages it |
+| --- | --- | --- |
+| `ISSUE_LABEL` (default `ready-for-agent`) | human APPROVED this ticket — label whole waves at once; the planner orders dependencies itself from issue bodies / `DEP_ORDER_FILE` | human adds; merger closes the issue when done |
+| `blocked` | EXTERNAL hold only (waiting on a person/decision outside the repo) | human adds AND removes |
+| `size:small` / `size:large` | pin the implementer model, overriding the planner's difficulty call | human |
+
+The classic failure: using `blocked` to encode sequencing ("T02 waits for T01").
+That duplicates what the planner already computes, and nothing removes the
+label when the dependency ships — so the run ends "All done" with a full
+backlog. Sequencing lives in issue bodies and `DEP_ORDER_FILE`, never in
+labels. The loop's exit message now counts invisible tickets, but the fix is
+at the source: ticket generators must not emit `blocked` for mere ordering.
+
 ## Three slots — the only project-specific config
 
 Everything else in `.sandcastle/` is template code that a future harness sync

@@ -449,6 +449,37 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   if (issues.length === 0) {
     // No unblocked work — either everything is done or everything is blocked.
     console.log("No unblocked issues to work on. Exiting.");
+    // "All done" has cried wolf before: tickets existed but wore no ready
+    // label, or still wore `blocked` after their dependency shipped. Count
+    // what the planner can't see, so the human can tell "backlog empty"
+    // from "backlog invisible". Best-effort — never blocks the exit.
+    try {
+      if (ISSUE_SOURCE === "github") {
+        const open = JSON.parse(
+          execSync(
+            `gh issue list --state open --limit 200 --json number,labels --jq "[.[] | {number, labels: [.labels[].name]}]"`,
+            { encoding: "utf8" },
+          ),
+        ) as { number: number; labels: string[] }[];
+        if (open.length > 0) {
+          const ready = open.filter((i) => i.labels.includes(ISSUE_LABEL)).length;
+          const invisible = open.length - ready;
+          const blocked = open.filter((i) => i.labels.includes("blocked")).length;
+          console.log(
+            `⚠ Not the whole story: ${open.length} open issue(s) remain — ` +
+              `${ready} labelled "${ISSUE_LABEL}" (the planner judged them dep-blocked this round), ` +
+              `${invisible} INVISIBLE to the planner (no "${ISSUE_LABEL}"; ${blocked} labelled blocked). ` +
+              `Label the next wave ready — \`blocked\` is for external holds only, the planner orders dependencies itself.`,
+          );
+        }
+      } else {
+        const n = readdirSync(join(process.cwd(), ".sandcastle", "issues")).filter((f) => f.endsWith(".md")).length;
+        if (n > 0)
+          console.log(`⚠ ${n} local issue file(s) remain in .sandcastle/issues/ — the planner judged them all dep-blocked this round.`);
+      }
+    } catch {
+      // gh offline / no issues dir — the audit is a courtesy, not a gate
+    }
     break;
   }
 
