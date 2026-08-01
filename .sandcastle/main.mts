@@ -24,7 +24,7 @@
 import * as sandcastle from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -293,11 +293,15 @@ const STORE = "/home/agent/pnpm-store";
 // this file, which a harness re-sync would overwrite.
 const INSTALL_CMD =
   process.env.INSTALL_CMD ?? `${CD_WS}pnpm config set store-dir ${STORE} && pnpm install`;
-const dockerWithStore = () =>
-  docker({
+const dockerWithStore = () => {
+  // The store is gitignored, so a fresh install has no dir yet — and docker
+  // refuses to mount a hostPath that doesn't exist.
+  mkdirSync(".sandcastle/pnpm-store", { recursive: true });
+  return docker({
     mounts: [{ hostPath: ".sandcastle/pnpm-store", sandboxPath: STORE }],
     env: { ANTHROPIC_BASE_URL: R9_URL, ANTHROPIC_API_KEY: r9key() },
   });
+};
 
 // Hooks run inside the sandbox before the agent starts each iteration.
 const hooks = {
