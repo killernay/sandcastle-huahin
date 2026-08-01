@@ -95,6 +95,16 @@ const issues = () => {
 // here — including 429s that the harness quietly retries around.
 // ponytail: shells the sqlite3 CLI (ships with macOS) — no driver dependency.
 const R9DB = join(homedir(), ".9router/db/data.sqlite");
+// 9router stores only a ~200-char JSON preview of each request, and for
+// streaming calls (all of sandcastle's) no response body at all — the reply
+// only exists in the agent logs the live feed shows. Pull the human text out
+// of the preview instead of showing raw JSON.
+const textFrag = (s: string) => {
+  const frags = [...s.matchAll(/"text":"((?:[^"\\]|\\.)*)/g)].map((m) => m[1]);
+  const best = frags.sort((a, b) => b.length - a.length)[0];
+  if (!best) return s;
+  try { return JSON.parse('"' + best.replace(/\\$/, "") + '"'); } catch { return best; }
+};
 let r9At = 0;
 let r9Data: unknown = null;
 const r9stats = () => {
@@ -102,17 +112,33 @@ const r9stats = () => {
     r9At = Date.now();
     try {
       const q = (sql: string) => JSON.parse(sh(`sqlite3 -readonly -json "${R9DB}" "${sql}"`) || "[]");
+      type R9Row = { req?: string; resp?: string; [k: string]: unknown };
+      const tidy = (rows: R9Row[]) =>
+        rows.map((r) => {
+          // Every agent call starts with the same system-reminder header and
+          // 9router keeps only the first ~200 chars — so an extracted preview
+          // that is just that header carries zero information. Drop it.
+          const req = r.req ? textFrag(r.req) : "";
+          return {
+            ...r,
+            req: req.startsWith("<system-reminder>") ? "" : req,
+            resp: /^\[(Empty|Streaming)/.test(r.resp ?? "") ? "" : (r.resp ?? ""),
+          };
+        });
       r9Data = {
-        recent: q(
+        recent: tidy(q(
           "SELECT id, timestamp, provider || '/' || model AS model, status, " +
             "json_extract(data,'$.latency.total') AS ms, " +
+            "json_extract(data,'$.latency.ttft') AS ttft, " +
             "json_extract(data,'$.tokens.prompt_tokens') AS ptok, " +
             "json_extract(data,'$.tokens.completion_tokens') AS ctok, " +
+            "json_extract(data,'$.tokens.cache_read_input_tokens') AS cr, " +
+            "json_extract(data,'$.tokens.cache_creation_input_tokens') AS cw, " +
             "substr(coalesce(json_extract(data,'$.error'),''),1,120) AS err, " +
             "substr(coalesce(json_extract(data,'$.request._preview'), json_extract(data,'$.request'), ''),1,600) AS req, " +
             "substr(coalesce(json_extract(data,'$.response.content'),''),1,800) AS resp " +
             "FROM requestDetails ORDER BY timestamp DESC LIMIT 20",
-        ),
+        )),
         byModel: q(
           "SELECT provider || '/' || model AS model, COUNT(*) AS calls, " +
             "SUM(status!='success') AS errors, " +
@@ -140,7 +166,11 @@ const attrib = (name: string, issueModels: Record<string, string>) => {
   const m = name.match(/^sandcastle-issue-(.+)-(implementer|reviewer)$/);
   if (m) {
     const role = m[2];
-    return { role, issue: m[1], model: shortModel(role === "implementer" ? issueModels[m[1]] ?? "?" : MODELS.reviewer) };
+    // An issue absent from the current run.log's plan lines belongs to an
+    // earlier run (relaunch truncates the log) — its stale agent log stays on
+    // disk. Say so instead of guessing a model.
+    if (issueModels[m[1]] === undefined) return { role, issue: m[1], model: "prev run" };
+    return { role, issue: m[1], model: shortModel(role === "implementer" ? issueModels[m[1]] : MODELS.reviewer) };
   }
   if (name.endsWith("-planner")) return { role: "planner", issue: "", model: shortModel(MODELS.planner) };
   if (name.endsWith("-merger")) return { role: "merger", issue: "", model: shortModel(MODELS.merger) };
@@ -243,7 +273,7 @@ const state = () => {
           const lines = cleanLines(p);
           const who = attrib(name, issueModels);
           collectFeed(name, lines, who);
-          return { name, ageS: Math.round((Date.now() - statSync(p).mtimeMs) / 1000), tail: lines.slice(-40).join("\n"), ...who };
+          return { name, ageS: Math.round((Date.now() - statSync(p).mtimeMs) / 1000), tail: lines.slice(-150).join("\n"), ...who };
         })
         .sort((a, b) => a.ageS - b.ageS)
         .slice(0, 8);
@@ -357,10 +387,10 @@ const HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   .fl{display:flex;gap:var(--space-sm);padding:2px 0;align-items:baseline}
   .fl.new{animation:fadein .5s var(--ease-out) 1}
   @keyframes fadein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
-  .fl .t{color:var(--color-ink-3);flex:none}
-  .fl .badge{flex:none;color:var(--bc,var(--color-ink-2));font-weight:700}
-  .fl .badge::before{content:"●";margin-right:5px}
-  .fl .tx{color:var(--color-ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
+  .t{color:var(--color-ink-3);flex:none}
+  .badge{flex:none;color:var(--bc,var(--color-ink-2));font-weight:700}
+  .badge::before{content:"●";margin-right:5px}
+  .tx{color:var(--color-ink-2);white-space:pre-wrap;overflow-wrap:anywhere}
 
   .chips{display:flex;flex-wrap:wrap;gap:var(--space-sm);padding:var(--space-sm) var(--space-md);
          border-bottom:1px solid var(--color-rule)}
@@ -371,14 +401,14 @@ const HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
   .chipm.off{opacity:.4;text-decoration:line-through}
   .chipm:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}
   .r9feed{height:280px}
+  .ok{color:var(--color-good);flex:none} .err{color:var(--color-critical);flex:none}
   .r9d{border:0;margin:0;background:none;border-radius:0}
-  .r9d summary{padding:2px 0;font-weight:400;color:inherit;display:flex;gap:var(--space-sm);
+  .r9d summary{padding:2px 0;font-weight:400;color:var(--color-ink-2);display:flex;gap:var(--space-sm);
                align-items:baseline}
   .r9x{margin:var(--space-xs) 0 var(--space-sm) var(--space-lg);padding:var(--space-sm) var(--space-md);
        border-left:2px solid var(--color-rule);color:var(--color-ink-2);font-size:var(--text-sm);
        white-space:pre-wrap;overflow-wrap:anywhere}
   .r9x b{color:var(--color-ink-3);text-transform:uppercase;letter-spacing:.06em;font-size:11px}
-  .fl .ok{color:var(--color-good);flex:none} .fl .err{color:var(--color-critical);flex:none}
 
   .issues{margin-top:var(--space-md);display:grid;grid-template-columns:repeat(auto-fit,minmax(min(340px,100%),1fr));
           gap:var(--space-sm)}
@@ -435,6 +465,7 @@ const HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8">
       <small>every log, merged · who · role · model</small></div>
     <div class="feed" id="feed"></div></div>
   <div class="feed-box" id="r9-box" hidden><div class="feed-head">9router traffic
+      <button class="chipm" id="r9-expand" aria-pressed="false">expand all</button>
       <small>every gateway call · last hour totals</small></div>
     <div class="chips" id="r9-chips"></div>
     <div class="feed r9feed" id="r9-feed"></div></div>
@@ -452,7 +483,13 @@ const hueFor = (name) => agentHue[name] ?? (agentHue[name] = hues[Object.keys(ag
 let feedSeen = 0;
 const hiddenM = new Set();   // models toggled off via the 9router chips
 const openR9 = new Set();    // expanded request/response rows, kept across polls
+let r9All = false;           // master expand/collapse for the 9router list
 document.addEventListener("click", (e) => {
+  if (e.target.closest("#r9-expand")) {
+    r9All = !r9All;
+    if (!r9All) openR9.clear();
+    tick(); return;
+  }
   const b = e.target.closest("[data-m]");
   if (!b) return;
   hiddenM.has(b.dataset.m) ? hiddenM.delete(b.dataset.m) : hiddenM.add(b.dataset.m);
@@ -507,7 +544,7 @@ async function tick(){
   feedEl.innerHTML = s.feed.map((f, idx) =>
     '<div class="fl' + (idx >= feedSeen ? " new" : "") + '">' +
     '<span class="t age" data-t="' + f.t + '">' + fmtAge(Date.now() - f.t) + "</span>" +
-    '<span class="badge" style="--bc:' + hueFor(f.agent) + '">' + esc(who(f)) + "</span>" +
+    '<span class="badge" style="--bc:' + hueFor(f.model) + '">' + esc(who(f)) + "</span>" +
     '<span class="tx">' + esc(f.line) + "</span></div>").join("");
   feedSeen = s.feed.length;
   if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
@@ -523,22 +560,31 @@ async function tick(){
       esc(m.model) + " · " + m.calls + " calls" +
       (m.errors > 0 ? " · " + m.errors + " err" + (m.rate429 > 0 ? " (" + m.rate429 + "×429)" : "") : "") + "</button>").join("")
       || '<span class="chipm">no calls in the last hour</span>';
+    const xb = document.getElementById("r9-expand");
+    xb.textContent = r9All ? "collapse all" : "expand all";
+    xb.setAttribute("aria-pressed", String(r9All));
     const r9f = document.getElementById("r9-feed");
     const pin9 = r9f.scrollHeight - r9f.scrollTop - r9f.clientHeight < 40;
     for (const d of document.querySelectorAll("details[data-r9]"))
       d.open ? openR9.add(d.dataset.r9) : openR9.delete(d.dataset.r9);
     r9f.innerHTML = s.r9.recent.slice().reverse()
       .filter((r) => !hiddenM.has(r.model))
-      .map((r) =>
-        '<details class="r9d" data-r9="' + esc(r.id) + '"' + (openR9.has(r.id) ? " open" : "") + "><summary>" +
-        '<span class="t">' + new Date(r.timestamp).toLocaleTimeString() + "</span>" +
-        '<span class="' + (r.status === "success" ? "ok" : "err") + '">' + (r.status === "success" ? "✓" : "✗") + "</span>" +
-        '<span class="badge" style="--bc:' + hueFor(r.model) + '">' + esc(r.model) + "</span>" +
-        '<span class="tx">' + (r.ms ? r.ms + "ms" : "…") +
-          (r.ptok ? " · " + r.ptok + "→" + (r.ctok ?? 0) + " tok" : "") +
-          (r.err ? " · " + esc(r.err) : "") + "</span></summary>" +
-        '<div class="r9x"><b>→ request</b>\\n' + esc(r.req || "(empty)") +
-        '\\n\\n<b>← response</b>\\n' + esc(r.resp || "(pending / streaming)") + "</div></details>").join("");
+      .map((r) => {
+        const line =
+          '<span class="t">' + new Date(r.timestamp).toLocaleTimeString() + "</span>" +
+          '<span class="' + (r.status === "success" ? "ok" : "err") + '">' + (r.status === "success" ? "✓" : "✗") + "</span>" +
+          '<span class="badge" style="--bc:' + hueFor(r.model.split("/").pop()) + '">' + esc(r.model) + "</span>" +
+          '<span class="tx">' + (r.ms ? r.ms + "ms" : "…") +
+            (r.ttft ? " · ttft " + r.ttft + "ms" : "") +
+            (r.ptok ? " · in " + r.ptok + (r.cr ? " (↻" + r.cr + (r.cw ? " +" + r.cw : "") + ")" : "") + " · out " + (r.ctok ?? 0) : "") +
+            (r.err ? " · " + esc(r.err) : "") + "</span>";
+        const body = (r.req ? "<b>→ request</b>\\n" + esc(r.req) : "") +
+          (r.resp ? (r.req ? "\\n\\n" : "") + "<b>← response</b>\\n" + esc(r.resp) : "");
+        return body
+          ? '<details class="r9d" data-r9="' + esc(r.id) + '"' + (r9All || openR9.has(r.id) ? " open" : "") +
+            "><summary>" + line + '</summary><div class="r9x">' + body + "</div></details>"
+          : '<div class="fl">' + line + "</div>";
+      }).join("");
     if (pin9) r9f.scrollTop = r9f.scrollHeight;
   } else r9box.hidden = true;
 
