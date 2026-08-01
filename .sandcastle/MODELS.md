@@ -8,13 +8,13 @@ that phase through the local 9router gateway instead.
 
 | Var            | Phase        | Default (unset)   |
 | -------------- | ------------ | ----------------- |
-| `MODEL_PLAN`   | planner      | claude-opus-4-8   |
-| `MODEL_IMPL`   | implementer  | claude-opus-4-8   |
-| `MODEL_REVIEW` | reviewer     | claude-opus-4-8   |
-| `MODEL_MERGE`  | merger       | claude-opus-4-8   |
+| `MODEL_PLAN`   | planner      | claude-opus-5   |
+| `MODEL_IMPL`   | implementer  | claude-opus-5   |
+| `MODEL_REVIEW` | reviewer     | claude-opus-5   |
+| `MODEL_MERGE`  | merger       | claude-opus-5   |
 
-A bare id (`claude-opus-4-8`) → native Claude subscription.
-An id with `/` (`kimi/kimi-k2.7-code`, `ag/gemini-3.1-pro-low`, `cc/claude-opus-4-8`)
+A bare id (`claude-opus-5`) → native Claude subscription.
+An id with `/` (`kimi/kimi-k2.7-code`, `ag/gemini-3.1-pro-low`, `cc/claude-opus-5`)
 → routed through 9router at `http://host.docker.internal:20128` using the key at
 `~/.9router/auth/cli-secret`.
 
@@ -22,7 +22,7 @@ An id with `/` (`kimi/kimi-k2.7-code`, `ag/gemini-3.1-pro-low`, `cc/claude-opus-
 
 - kimi:   `kimi/kimi-k2.7-code`, `kimi/kimi-k2.5-thinking`, `kimi/kimi-k3`
 - gemini: `ag/gemini-3.1-pro-low`, `ag/gemini-pro-agent`, `ag/gemini-3-flash`
-- claude: `cc/claude-opus-4-8`, `cc/claude-sonnet-5`, `ag/claude-opus-4-6-thinking`
+- claude: `cc/claude-opus-5`, `cc/claude-sonnet-5`, `ag/claude-opus-4-6-thinking`
 
 ## Recipes
 

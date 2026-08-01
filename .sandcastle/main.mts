@@ -90,7 +90,7 @@ const r9key = () => {
 // Kimi K3. Override any via env: MODEL_PLAN, MODEL_REVIEW, MODEL_MERGE,
 // MODEL_IMPL_SMALL, MODEL_IMPL_LARGE.
 const modelFor = (role: "PLAN" | "REVIEW" | "MERGE") =>
-  process.env[`MODEL_${role}`] ?? "cc/claude-opus-4-8";
+  process.env[`MODEL_${role}`] ?? "cc/claude-opus-5";
 const IMPL_SMALL = process.env.MODEL_IMPL_SMALL ?? "ag/gemini-3.1-pro-low";
 const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
 

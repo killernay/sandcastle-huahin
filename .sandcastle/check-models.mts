@@ -22,9 +22,9 @@ const r9key = () => {
   catch { return process.env.R9_KEY ?? ""; }
 };
 
-const PLAN = process.env.MODEL_PLAN ?? "cc/claude-opus-4-8";
-const REVIEW = process.env.MODEL_REVIEW ?? "cc/claude-opus-4-8";
-const MERGE = process.env.MODEL_MERGE ?? "cc/claude-opus-4-8";
+const PLAN = process.env.MODEL_PLAN ?? "cc/claude-opus-5";
+const REVIEW = process.env.MODEL_REVIEW ?? "cc/claude-opus-5";
+const MERGE = process.env.MODEL_MERGE ?? "cc/claude-opus-5";
 const IMPL_SMALL = process.env.MODEL_IMPL_SMALL ?? "ag/gemini-3.1-pro-low";
 const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
 
