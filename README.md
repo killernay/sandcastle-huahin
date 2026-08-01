@@ -130,7 +130,8 @@ unless you want the next run to rebuild from the `Dockerfile`.
 | `INSTALL_CMD` | What the sandbox runs to make the repo buildable | pnpm install |
 | `RATE_LIMIT_WAIT_S` | Pause before retrying an issue whose models were all rate-limited | `90` |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
-| `MODEL_PLAN/REVIEW/MERGE` | Reasoning + QC models | `cc/claude-opus-5` |
+| `MODEL_PLAN` | Planner (reasoning) model | `cc/claude-fable-5` |
+| `MODEL_REVIEW/MERGE` | QC models | `cc/claude-opus-5` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |
 | `MODEL_IMPL_LARGE` | Strong model for hard issues | `kimi/kimi-k3` |
 
@@ -300,7 +301,7 @@ with a consistent label works. The skills just make the planning half pleasant.
 preflight (check models live on 9router)
   └─ for each iteration (max 10):
        planner   → reads open {{ISSUE_LABEL}} issues + dep-order → picks ≤3,
-                   tags each small/large           [cc/claude-opus-5]
+                   tags each small/large           [cc/claude-fable-5]
        for each issue in parallel:
          implementer → writes code, commits        [agy | kimi, by size]
          reviewer    → QC, may add commits          [cc/claude-opus-5]

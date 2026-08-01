@@ -85,12 +85,12 @@ const r9key = () => {
 };
 
 // ── Model routing (all via 9router, prefix required: cc/… ag/… kimi/…) ───────
-// PLAN / REVIEW / MERGE: Claude Opus (reasoning + QC). IMPL: picked by the
+// PLAN: Claude Fable (reasoning). REVIEW / MERGE: Claude Opus (QC). IMPL: picked by the
 // planner's per-issue difficulty — small/easy → agy (Gemini), large/hard →
 // Kimi K3. Override any via env: MODEL_PLAN, MODEL_REVIEW, MODEL_MERGE,
 // MODEL_IMPL_SMALL, MODEL_IMPL_LARGE.
 const modelFor = (role: "PLAN" | "REVIEW" | "MERGE") =>
-  process.env[`MODEL_${role}`] ?? "cc/claude-opus-5";
+  process.env[`MODEL_${role}`] ?? (role === "PLAN" ? "cc/claude-fable-5" : "cc/claude-opus-5");
 const IMPL_SMALL = process.env.MODEL_IMPL_SMALL ?? "ag/gemini-3.1-pro-low";
 const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
 
