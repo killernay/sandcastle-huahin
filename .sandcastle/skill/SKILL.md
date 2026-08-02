@@ -51,6 +51,9 @@ fi
 # 9. models live + sandbox image built + prompt args wired + no built-in overridden
 npx tsx .sandcastle/check-models.mts
 
+# 9b. the harness's own rules and its docs agree with its code (~200ms, no Docker)
+npx tsx --test .sandcastle/*.test.mts
+
 # 10. how many runs are live — TWO lines per run, 0 before you start another
 ps -eo pid,lstart,command | grep "[.]sandcastle/main[.]mts"
 

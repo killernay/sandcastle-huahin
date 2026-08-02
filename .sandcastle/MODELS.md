@@ -6,23 +6,24 @@ that phase through the local 9router gateway instead.
 
 ## Env vars
 
-| Var            | Phase        | Default (unset)   |
-| -------------- | ------------ | ----------------- |
-| `MODEL_PLAN`   | planner      | claude-opus-5   |
-| `MODEL_IMPL`   | implementer  | claude-opus-5   |
-| `MODEL_REVIEW` | reviewer     | claude-opus-5   |
-| `MODEL_MERGE`  | merger       | claude-opus-5   |
+| Var                | Phase       | Default            |
+| ------------------ | ----------- | ------------------ |
+| `MODEL_PLAN`       | planner     | `cc/claude-opus-5` |
+| `MODEL_IMPL_SMALL` | implementer | `ag/gemini-3.1-pro-low` |
+| `MODEL_IMPL_LARGE` | implementer | `kimi/kimi-k3`     |
+| `MODEL_REVIEW`     | reviewer    | `cc/claude-opus-5` |
+| `MODEL_MERGE`      | merger      | `cc/claude-opus-5` |
 
-A bare id (`claude-opus-5`) → native Claude subscription.
-An id with `/` (`kimi/kimi-k2.7-code`, `ag/gemini-3.1-pro-low`, `cc/claude-opus-5`)
-→ routed through 9router at `http://host.docker.internal:20128` using the key at
-`~/.9router/auth/cli-secret`.
+There are two implementer tiers, not one: the planner tags each issue
+`small` or `large` and the model follows. A single combined implementer
+variable does not exist; `config.test.mts` fails if a doc invents one.
 
-## 9router model ids (run `9router` then `curl localhost:20128/v1/models`)
+Every id routes through 9router, including the Claude ones — the `cc/` prefix
+is what says so. Defaults live in exactly one place, the knob table at the top
+of `config.mts`; this table is checked against it by `config.test.mts`.
 
-- kimi:   `kimi/kimi-k2.7-code`, `kimi/kimi-k2.5-thinking`, `kimi/kimi-k3`
-- gemini: `ag/gemini-3.1-pro-low`, `ag/gemini-pro-agent`, `ag/gemini-3-flash`
-- claude: `cc/claude-opus-5`, `cc/claude-sonnet-5`, `ag/claude-opus-4-6-thinking`
+Values come from `.sandcastle/.env`, read by `config.mts` (one small parser, no
+dotenv dependency). Inline env still wins: `MODEL_REVIEW=… npm run sandcastle`.
 
 ## Combos — one id, an ordered list of models
 
@@ -46,21 +47,31 @@ no `.env` edit, no restart. `check-models.mts` probes them like any other id.
 ## Recipes
 
 ```bash
-# All Opus on subscription (default — just run it)
+# Defaults — just run it
 npm run sandcastle
 
-# Cheap reviewer: Opus implements (subscription), Kimi reviews (9router)
+# Cheap reviewer: keep Opus planning, hand QC to Kimi
 MODEL_REVIEW=kimi/kimi-k2.7-code npm run sandcastle
 
-# Everything on Kimi (fast/cheap, lower quality on hard tasks)
-MODEL_PLAN=kimi/kimi-k3 MODEL_IMPL=kimi/kimi-k2.7-code \
-MODEL_REVIEW=kimi/kimi-k2.5-thinking MODEL_MERGE=kimi/kimi-k2.7-code \
-  npm run sandcastle
+# Everything on Kimi (fast, cheaper, weaker on hard tickets)
+MODEL_PLAN=kimi/kimi-k3 MODEL_IMPL_SMALL=kimi/kimi-k2.7-code \
+MODEL_IMPL_LARGE=kimi/kimi-k3 MODEL_REVIEW=kimi/kimi-k2.5-thinking \
+MODEL_MERGE=kimi/kimi-k2.7-code npm run sandcastle
 
-# Gemini implements, Opus reviews (catch Gemini's mistakes on subscription)
-MODEL_IMPL=ag/gemini-3.1-pro-low npm run sandcastle
+# Gemini takes the easy tickets, Kimi keeps the hard ones
+MODEL_IMPL_SMALL=ag/gemini-3.1-pro-low npm run sandcastle
 
-# Persist a combo: put the vars in .sandcastle/.env — dotenv loads them.
+# Skip review on easy tickets — roughly halves tokens per small ticket
+REVIEW_SIZES=large npm run sandcastle
+
+# Persist any of these: put them in .sandcastle/.env (config.mts reads it).
+```
+
+Check a combination before spending tokens on it:
+
+```bash
+npx tsx .sandcastle/check-models.mts   # every id must answer, not just be listed
+npx tsx .sandcastle/config.mts         # what the loop will actually use
 ```
 
 ## Prereqs

@@ -13,25 +13,12 @@
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CONFIG } from "./config.mts";
 
-// Same 6-line .env loader as main.mts, so a standalone run behaves like the loop.
-for (const line of (() => {
-  try {
-    return readFileSync(join(process.cwd(), ".sandcastle", ".env"), "utf8").split("\n");
-  } catch {
-    return [];
-  }
-})()) {
-  const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
-  if (m && !line.trimStart().startsWith("#") && process.env[m[1]] === undefined) {
-    process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-}
-
-const SOURCE = process.env.ISSUE_SOURCE ?? "github";
+const SOURCE = CONFIG.ISSUE_SOURCE;
 
 if (SOURCE === "github") {
-  const LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
+  const LABEL = CONFIG.ISSUE_LABEL;
   process.stdout.write(
     execSync(
       `gh issue list --state open --label ${LABEL} --limit 100 --json number,title,body,labels ` +

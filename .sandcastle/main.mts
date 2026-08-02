@@ -29,6 +29,15 @@ import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { CONFIG, configProblems } from "./config.mts";
+import {
+  completedBranches,
+  implChain as pickImplChain,
+  isDirtyWorktree,
+  isRateLimited,
+  livenessVerdict,
+  wantsReview,
+} from "./decisions.mts";
 
 // The planner emits its plan as JSON inside <plan> tags; Output.object extracts
 // and validates it against this schema. We use Zod here, but any Standard
@@ -52,126 +61,21 @@ const planSchema = z.object({
 // Configuration
 // ---------------------------------------------------------------------------
 
-// Maximum number of plan→execute→merge cycles before stopping.
-const MAX_ITERATIONS = 10;
+// Configuration and the rules the loop follows now live in their own modules:
+// config.mts owns every knob (and validates them), decisions.mts owns the pure
+// rules (fallback chain, liveness verdict, what counts as dirty). This file is
+// the effects: containers, git, network, prompts.
+const {
+  CD_WS, WORKSPACE_DIR, ISSUE_LABEL, ISSUE_SOURCE, DEP_ORDER_FILE, BATCH_SIZE,
+  MAX_ITERATIONS, SANDBOX, STORE, INSTALL_CMD, R9_URL, r9key,
+  WORKSPACE_HINT, PROJECT_RULES, RATE_LIMIT_WAIT_S,
+} = CONFIG;
+const IMPL_SMALL = CONFIG.MODEL.IMPL_SMALL;
+const IMPL_LARGE = CONFIG.MODEL.IMPL_LARGE;
+const modelFor = (role: "PLAN" | "REVIEW" | "MERGE") => CONFIG.MODEL[role];
 
-// Load .sandcastle/.env into this process so MODEL_* presets set there take
-// effect. Sandcastle's resolver only forwards .env into the *sandbox*, not into
-// this host script — so without this, MODEL_* in .env would silently do nothing.
-// Inline env (MODEL_IMPL_SMALL=… npm run) still wins; we don't overwrite set vars.
-// ponytail: 6-line parser beats adding a dotenv dependency.
-for (const line of (() => {
-  try {
-    return readFileSync(join(process.cwd(), ".sandcastle", ".env"), "utf8").split("\n");
-  } catch {
-    return [];
-  }
-})()) {
-  const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
-  if (m && !line.trimStart().startsWith("#") && process.env[m[1]] === undefined) {
-    process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-}
-
-// ── Sandbox choice (set SANDBOX in .sandcastle/.env) ─────────────────────────
-// docker (default): agents run isolated in the sandcastle image — build it
-//   once per repo with `npx sandcastle docker build-image`.
-// none: agents run straight on the host. No Docker needed, but NO isolation,
-//   and the agent keeps its normal permission prompts — under nohup an
-//   unapproved tool call HANGS the run silently. Pre-allowlist what the agent
-//   needs in .claude/settings.json before going AFK on this.
-const SANDBOX = process.env.SANDBOX ?? "docker";
-if (SANDBOX !== "docker" && SANDBOX !== "none")
-  throw new Error(`SANDBOX must be "docker" or "none", got "${SANDBOX}"`);
-
-// 9router runs on the host; containers reach it via host.docker.internal,
-// host-run agents (SANDBOX=none) via localhost.
-// Everything routes through 9router — the user's subscription licenses live
-// there, so all models (claude/gemini/kimi) are covered with no per-token cost.
-const R9_URL =
-  process.env.R9_URL ??
-  (SANDBOX === "none" ? "http://localhost:20128" : "http://host.docker.internal:20128");
-const r9key = () => {
-  try {
-    return readFileSync(join(homedir(), ".9router/auth/cli-secret"), "utf8").trim();
-  } catch {
-    return process.env.R9_KEY ?? "";
-  }
-};
-
-// ── Model routing (all via 9router, prefix required: cc/… ag/… kimi/…) ───────
-// PLAN / REVIEW / MERGE: Claude Opus (reasoning + QC). IMPL: picked by the
-// planner's per-issue difficulty — small/easy → agy (Gemini), large/hard →
-// Kimi K3. Override any via env: MODEL_PLAN, MODEL_REVIEW, MODEL_MERGE,
-// MODEL_IMPL_SMALL, MODEL_IMPL_LARGE.
-const modelFor = (role: "PLAN" | "REVIEW" | "MERGE") =>
-  process.env[`MODEL_${role}`] ?? "cc/claude-opus-5";
-const IMPL_SMALL = process.env.MODEL_IMPL_SMALL ?? "ag/gemini-3.1-pro-low";
-const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
-
-// ── Project layout (parametrized so this harness drops into any repo) ────────
-// WORKSPACE_DIR: subdirectory holding the pnpm/package.json workspace, relative
-// to repo root. Empty = the workspace IS the repo root. e.g. a monorepo
-// might set "apps/web".
-// Set in .sandcastle/.env per project.
-const WORKSPACE_DIR = process.env.WORKSPACE_DIR ?? "";
-// Shell prefix to enter the workspace ("" when it's the root, else "cd <dir> && ").
-const CD_WS = WORKSPACE_DIR ? `cd ${WORKSPACE_DIR} && ` : "";
-
-// GitHub label the planner filters open issues by (your "ready for the agent"
-// signal). Defaults to "ready-for-agent".
-const ISSUE_LABEL = process.env.ISSUE_LABEL ?? "ready-for-agent";
-// Where the planner gets its issues (formats live in list-issues.mts):
-// github (default) = gh issue list by ISSUE_LABEL; local = .sandcastle/issues/*.md,
-// no GitHub or GH_TOKEN involved at all.
-const ISSUE_SOURCE = process.env.ISSUE_SOURCE ?? "github";
-if (ISSUE_SOURCE !== "github" && ISSUE_SOURCE !== "local")
-  throw new Error(`ISSUE_SOURCE must be "github" or "local", got "${ISSUE_SOURCE}"`);
-// Optional file holding the authoritative dependency/build order (e.g. a
-// sprint-status.yaml or roadmap doc). Empty = no such file; the planner then
-// orders by issue body/labels alone.
-const DEP_ORDER_FILE = process.env.DEP_ORDER_FILE ?? "";
-
-// How many issues the planner may take per round. Each one runs an implementer
-// and a reviewer in its own sandbox, so this is the loop's parallelism dial.
-// The ceiling is rarely the machine (agents spend most of their time waiting on
-// the model): it's your gateway's throughput, and how often two issues touching
-// the same module collide in the merge.
-const BATCH_SIZE = process.env.BATCH_SIZE ?? "3";
-
-// What every agent is told about repo layout and how to run checks. This is
-// load-bearing, not boilerplate: a generic hint is a false-green risk — an agent
-// that runs `pnpm test` at a root with no test script gets exit 0 and reports
-// success. Projects override it with .sandcastle/workspace-hint.md (real script
-// names, real gotchas); the default below only knows WORKSPACE_DIR.
-// ponytail: a file beats a multi-line .env value; absent = generated default.
-const WORKSPACE_HINT = (() => {
-  try {
-    return readFileSync(join(process.cwd(), ".sandcastle", "workspace-hint.md"), "utf8").trim();
-  } catch {
-    return WORKSPACE_DIR
-      ? `The workspace lives in \`${WORKSPACE_DIR}/\` — **not** the repo root. Run every ` +
-          `check from there: \`${CD_WS}pnpm typecheck && pnpm test\`, and both must pass ` +
-          `before you commit.\n\nThe repo root is not the workspace: \`pnpm test\` there ` +
-          `finds no tests and exits clean — that is NOT a green build.`
-      : `Run \`pnpm typecheck && pnpm test\` (or this repo's equivalent — read the ` +
-          `\`scripts\` in package.json) before committing. A command that finds no tests ` +
-          `and exits clean is NOT a green build.`;
-  }
-})();
-
-// Selection rules only this project knows — which epics are finished, which are
-// blocked on someone outside the repo, which stories are deliberately deferred.
-// Lives in a file, not in plan-prompt.md, so re-syncing the harness from the
-// template can't silently delete a project's planning knowledge.
-const PROJECT_RULES = (() => {
-  try {
-    const body = readFileSync(join(process.cwd(), ".sandcastle", "planning-rules.md"), "utf8").trim();
-    return body ? `# PROJECT RULES (override the generic rules above)\n\n${body}` : "";
-  } catch {
-    return "";
-  }
-})();
+// Fail before the first token is spent, not deep inside a retry.
+for (const problem of configProblems()) throw new Error(`Config: ${problem}`);
 
 // Is there anything on this branch to merge? Asked of git on the host, not of
 // the run: sandbox.run() reports only the commits IT produced, so a branch whose
@@ -190,35 +94,13 @@ const commitsAhead = (branch: string) => {
   }
 };
 
-// Seconds to wait before re-running an issue whose every model was rate-limited.
-// Provider windows observed in practice: kimi ~1-2 min, gemini a few minutes.
-const RATE_LIMIT_WAIT_S = Number(process.env.RATE_LIMIT_WAIT_S ?? 90);
-
-// Is this failure "come back later" rather than "this is broken"? Providers say
-// it in their own words, so match on what they actually send.
-// ponytail: string matching, because the error crosses an Effect/CLI boundary
-// that drops the status code. A false positive costs one extra wait.
-const isRateLimited = (e: unknown) =>
-  /429|RESOURCE_EXHAUSTED|rate.?limit|quota|usage limit|too many requests/i.test(
-    (e as Error)?.message ?? String(e),
-  );
-
-// Models preflight found live on 9router (set by preflightModels()). Used to
-// skip a known-dead model in the fallback chain instead of wasting a run on it.
+// Models preflight found live on 9router. Passed to the fallback chain so a
+// known-dead model is skipped instead of costing a run.
 let liveModels: Set<string> | null = null;
 
-// Fallback chain per size: preferred model first, then the sibling tier — so a
-// dead k3 still gets the work done by agy. We drop any model preflight already
-// knows is offline; if that empties the list, fall back to the raw pair (the
-// per-run try/catch still guards it).
-// ponytail: one retry with the sibling model beats a per-issue dead pipeline.
-const implChain = (size: "small" | "large") => {
-  const raw = size === "large" ? [IMPL_LARGE, IMPL_SMALL] : [IMPL_SMALL, IMPL_LARGE];
-  const live = liveModels;
-  if (!live) return raw;
-  const filtered = raw.filter((m) => live.has(m));
-  return filtered.length > 0 ? filtered : raw;
-};
+// The chain decision lives in decisions.mts; this file only supplies the facts.
+const implChain = (size: "small" | "large") =>
+  pickImplChain(size, { small: IMPL_SMALL, large: IMPL_LARGE }, liveModels);
 
 // Preflight: confirm every model we intend to use is actually live on 9router
 // right now. Models come and go (a subscription lapses, k3 gets retired) — this
@@ -266,37 +148,23 @@ const preflightModels = async () => {
   const available = new Set(results.filter(([, err]) => err === null).map(([id]) => id));
   for (const [id, err] of failures) console.warn(`⚠ Preflight: ${id} answered ${err}`);
 
-  // Hard requirement: the plan/review/merge models MUST be live — there's no
-  // fallback for those phases, so a missing one aborts the run.
-  const core = [modelFor("PLAN"), modelFor("REVIEW"), modelFor("MERGE")];
-  const coreMissing = [...new Set(core)].filter((m) => !available.has(m));
-  if (coreMissing.length > 0) {
+  // The verdict itself lives in decisions.mts, so the preflight CLI cannot
+  // predict something this loop won't do. Here we only report and abort.
+  const verdict = livenessVerdict(available, {
+    plan: modelFor("PLAN"), review: modelFor("REVIEW"), merge: modelFor("MERGE"),
+    small: IMPL_SMALL, large: IMPL_LARGE,
+  });
+  for (const w of verdict.warnings) console.warn(`⚠ Preflight: ${w}`);
+  if (verdict.fatal.length) {
     throw new Error(
-      `Preflight: plan/review/merge models did not answer (no fallback for those phases):\n` +
-        coreMissing.map((m) => `  ${m} → ${failures.get(m)}`).join("\n") +
+      `Preflight:\n` + verdict.fatal.map((f) => `  ${f}`).join("\n") +
         `\nAnswering: ${[...available].sort().join(", ") || "(none)"}\n` +
-        `Fix MODEL_PLAN/REVIEW/MERGE in .sandcastle/.env, or wait if that is a rate limit.`,
+        `Fix the MODEL_* ids in .sandcastle/.env, or wait if that is a rate limit.` +
+        [...failures].map(([id, err]) => `\n  ${id} → ${err}`).join(""),
     );
   }
 
-  // Soft requirement: the two implementer tiers have mutual fallback, so a
-  // missing one is fine as long as the OTHER is live. Warn, don't abort — the
-  // per-issue fallback chain routes around the dead one (e.g. you turned off
-  // Kimi → all IMPL work flows to agy automatically).
-  const smallOk = available.has(IMPL_SMALL);
-  const largeOk = available.has(IMPL_LARGE);
-  if (!smallOk) console.warn(`⚠ Preflight: IMPL small ${IMPL_SMALL} not answering — those jobs fall back to ${IMPL_LARGE}.`);
-  if (!largeOk) console.warn(`⚠ Preflight: IMPL large ${IMPL_LARGE} not answering — those jobs fall back to ${IMPL_SMALL}.`);
-  if (!smallOk && !largeOk) {
-    throw new Error(
-      `Preflight: neither implementer model answered:\n` +
-        `  ${IMPL_SMALL} → ${failures.get(IMPL_SMALL)}\n  ${IMPL_LARGE} → ${failures.get(IMPL_LARGE)}\n` +
-        `Enable at least one, point MODEL_IMPL_SMALL/LARGE at a live model, or wait out the rate limit.`,
-    );
-  }
-
-  const liveList = [...new Set([...core, IMPL_SMALL, IMPL_LARGE])].filter((m) => available.has(m));
-  console.log(`Preflight OK — answering: ${liveList.join(", ")}`);
+  console.log(`Preflight OK — answering: ${verdict.live.join(", ")}`);
   return available;
 };
 
@@ -307,18 +175,6 @@ const preflightModels = async () => {
 // env MUST ride on the sandbox provider, else the in-sandbox `claude` CLI never
 // sees ANTHROPIC_BASE_URL and errors "model may not exist".
 // ponytail: sandbox env = the only spot createSandbox actually forwards.
-const STORE = "/home/agent/pnpm-store";
-// What the sandbox runs once, before the agent starts, to make the repo
-// buildable. pnpm by default because that's what the shipped Dockerfile
-// installs; an npm/yarn/bun project overrides it in .env rather than editing
-// this file, which a harness re-sync would overwrite.
-const INSTALL_CMD =
-  process.env.INSTALL_CMD ??
-  (SANDBOX === "none"
-    ? // The host keeps its own pnpm store — rewiring store-dir here would
-      // mutate the user's global pnpm config.
-      `${CD_WS}pnpm install`
-    : `${CD_WS}pnpm config set store-dir ${STORE} && pnpm install`);
 const makeSandbox = () => {
   if (SANDBOX === "none")
     return noSandbox({ env: { ANTHROPIC_BASE_URL: R9_URL, ANTHROPIC_API_KEY: r9key() } });
@@ -378,9 +234,7 @@ try {
     try {
       // Agents leave their own runtime droppings in the tree (.claude/) —
       // those alone don't count as work worth rescuing.
-      dirty = execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" })
-        .split("\n")
-        .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l));
+      dirty = isDirtyWorktree(execSync(`git -C ${path} status --porcelain`, { encoding: "utf8" }));
     } catch {
       continue; // not a worktree (or already gone) — leave it alone
     }
@@ -570,7 +424,16 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
 
         // Review whenever the branch carries work — including work committed in
         // an earlier round that was never merged, which this round is about to.
-        if (commitsAhead(issue.branch) > 0) {
+        //
+        // The reviewer is a second full agent: it opens the repo cold and reads
+        // it again, so it roughly doubles a ticket's token cost. On a CRUD or
+        // config ticket that is a poor trade; on schema, security or anything
+        // the planner called `large` it is the whole point. REVIEW_SIZES picks
+        // which tiers earn one — "large" is the frugal setting, "" skips review
+        // entirely (you are then merging unreviewed agent code).
+        const reviewing = wantsReview(issue.size, CONFIG.REVIEW_SIZES);
+        if (!reviewing) console.log(`  ↷ ${issue.id}: review skipped (size=${issue.size}, REVIEW_SIZES=${CONFIG.REVIEW_SIZES.join(",") || "none"})`);
+        if (reviewing && commitsAhead(issue.branch) > 0) {
           const review = await sandbox.run({
             name: "reviewer",
             maxIterations: 1,
@@ -629,23 +492,19 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // threw is excluded: its branch may be half-written.
   const completedIssues = settled
     .map((outcome, i) => ({ outcome, issue: issues[i]! }))
-    .filter(
-      (entry) =>
-        entry.outcome.status === "fulfilled" &&
-        commitsAhead(entry.issue.branch) > 0,
-    )
+    .filter((entry) => entry.outcome.status === "fulfilled")
     .map((entry) => entry.issue);
-
-  const completedBranches = completedIssues.map((i) => i.branch);
+  const completedIssuesWithWork = completedBranches(completedIssues, commitsAhead);
+  const branchesToMerge = completedIssuesWithWork.map((i) => i.branch);
 
   console.log(
-    `\nExecution complete. ${completedBranches.length} branch(es) with commits:`,
+    `\nExecution complete. ${branchesToMerge.length} branch(es) with commits:`,
   );
-  for (const branch of completedBranches) {
+  for (const branch of branchesToMerge) {
     console.log(`  ${branch}`);
   }
 
-  if (completedBranches.length === 0) {
+  if (branchesToMerge.length === 0) {
     // All agents ran but none made commits — nothing to merge this cycle.
     console.log("No commits produced. Nothing to merge.");
     continue;
@@ -669,9 +528,9 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
     promptFile: "./.sandcastle/merge-prompt.md",
     promptArgs: {
       // A markdown list of branch names, one per line.
-      BRANCHES: completedBranches.map((b) => `- ${b}`).join("\n"),
+      BRANCHES: branchesToMerge.map((b) => `- ${b}`).join("\n"),
       // A markdown list of issue IDs and titles, one per line.
-      ISSUES: completedIssues.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
+      ISSUES: completedIssuesWithWork.map((i) => `- ${i.id}: ${i.title}`).join("\n"),
       // How the merger marks an issue done. For local issues the git mv rides
       // the merge commit back to the host repo — that IS the "closed" state.
       CLOSE_CMD:
@@ -704,7 +563,7 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   // and the sandbox has no push credentials anyway (the host's do). Opt-in —
   // an AFK loop that pushes unattended is a choice, not a default. Never fatal:
   // a rejected push (someone else moved the branch) must not kill a healthy run.
-  if (/^(1|true|yes)$/i.test(process.env.AUTO_PUSH ?? "")) {
+  if (CONFIG.AUTO_PUSH) {
     try {
       execSync("git push", { encoding: "utf8", stdio: "pipe" });
       console.log("Pushed to remote.");

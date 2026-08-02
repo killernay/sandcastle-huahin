@@ -20,26 +20,13 @@ import { createServer } from "node:http";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { CONFIG } from "./config.mts";
 
-const PORT = Number(process.env.UI_PORT ?? 7717);
-const HOST = process.env.UI_HOST ?? "127.0.0.1";
+const PORT = CONFIG.UI_PORT;
+const HOST = CONFIG.UI_HOST;
 const SC = join(process.cwd(), ".sandcastle");
 
-// Same 6-line .env loader as main.mts — the feed labels planner/reviewer/merger
-// lines with their models, which live in .env (or these mirrored defaults).
-for (const line of (() => {
-  try { return readFileSync(join(SC, ".env"), "utf8").split("\n"); } catch { return []; }
-})()) {
-  const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
-  if (m && !line.trimStart().startsWith("#") && process.env[m[1]] === undefined) {
-    process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-}
-const MODELS = {
-  planner: process.env.MODEL_PLAN ?? "cc/claude-opus-5",
-  reviewer: process.env.MODEL_REVIEW ?? "cc/claude-opus-5",
-  merger: process.env.MODEL_MERGE ?? "cc/claude-opus-5",
-};
+const MODELS = { planner: CONFIG.MODEL.PLAN, reviewer: CONFIG.MODEL.REVIEW, merger: CONFIG.MODEL.MERGE };
 const shortModel = (m: string) => m.split("/").pop() ?? m;
 
 const sh = (cmd: string) => {
@@ -255,7 +242,12 @@ const headline = (run: ReturnType<typeof parseRun>, agents: Agent[], loop: numbe
 };
 
 const state = () => {
-  const runLines = cleanLines(join(SC, "run.log"));
+  // Only the current run: overlapping launches share run.log, so a crashed
+  // sibling's failures would otherwise show up as this run's. Each run opens
+  // with "Preflight OK".
+  const allRunLines = cleanLines(join(SC, "run.log"));
+  const runStart = allRunLines.map((l) => l.includes("Preflight OK")).lastIndexOf(true);
+  const runLines = runStart === -1 ? allRunLines : allRunLines.slice(runStart);
   const runLogRaw = runLines.slice(-400).join("\n");
   // Issue → implementer model comes from the plan lines, so read it first.
   const issueModels: Record<string, string> = {};

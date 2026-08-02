@@ -1,93 +1,68 @@
-// Preflight check: does .env load, do model ids resolve, are they LIVE on
-// 9router right now, and is every {{PLACEHOLDER}} in the prompts actually wired
-// up in main.mts? Run before a real run to avoid burning tokens on a dead model
-// id or an unwired prompt arg.  Usage: npx tsx .sandcastle/check-models.mts
+// Preflight: everything that can be wrong before a run costs tokens — models
+// that don't answer, a sandbox image nobody built, a GitHub token scoped to
+// another repo, a prompt placeholder main.mts never passes.
+//
+// It shares config.mts and decisions.mts with the loop, so it cannot disagree
+// with the thing it is meant to predict. It used to re-implement the model
+// liveness policy and the .env parser, kept in step by a comment.
+//
+//   npx tsx .sandcastle/check-models.mts
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { CONFIG, configProblems } from "./config.mts";
+import { livenessVerdict } from "./decisions.mts";
 
-for (const line of (() => {
-  try { return readFileSync(join(process.cwd(), ".sandcastle", ".env"), "utf8").split("\n"); }
-  catch { return []; }
-})()) {
-  const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
-  if (m && !line.trimStart().startsWith("#") && process.env[m[1]] === undefined) {
-    process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
-  }
-}
+const { PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE } = CONFIG.MODEL;
+const local = (u: string) => u.replace("host.docker.internal", "localhost");
 
-const R9_URL = process.env.R9_URL ?? "http://host.docker.internal:20128";
-const r9key = () => {
-  try { return readFileSync(join(homedir(), ".9router/auth/cli-secret"), "utf8").trim(); }
-  catch { return process.env.R9_KEY ?? ""; }
-};
-
-const PLAN = process.env.MODEL_PLAN ?? "cc/claude-opus-5";
-const REVIEW = process.env.MODEL_REVIEW ?? "cc/claude-opus-5";
-const MERGE = process.env.MODEL_MERGE ?? "cc/claude-opus-5";
-const IMPL_SMALL = process.env.MODEL_IMPL_SMALL ?? "ag/gemini-3.1-pro-low";
-const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
-
-// fetch live model list from 9router (localhost from host, not the container URL)
+// Listed on the gateway is not the same as usable: a rate-limited account keeps
+// its entry in /v1/models and only fails when an agent calls it. Ask each model
+// for one token instead. (The reverse is true too — the gateway answers 200 for
+// an id that doesn't exist — so both checks have to pass.)
 let available = new Set<string>();
 let reachable = false;
-try {
-  const res = await fetch(`${R9_URL.replace("host.docker.internal", "localhost")}/v1/models`, {
-    headers: { Authorization: `Bearer ${r9key()}` },
-  });
-  const body = (await res.json()) as { data?: Array<{ id: string }> };
-  available = new Set((body.data ?? []).map((m) => m.id));
-  reachable = true;
-} catch (e) {
-  console.error(`✗ cannot reach 9router at ${R9_URL} — is it running? (${(e as Error).message})`);
-}
-
-// Listed on the gateway is not the same as usable: a rate-limited or
-// unauthorized account keeps its entry in /v1/models and only fails when an
-// agent actually calls it. Ask each model for one token instead. (The reverse
-// is true too — the gateway answers 200 for an id that doesn't exist — so both
-// checks have to pass.)
 const answers = new Map<string, string>();
-if (reachable) {
-  const wanted = [...new Set([PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE])];
+try {
+  const res = await fetch(`${local(CONFIG.R9_URL)}/v1/models`, { headers: { Authorization: `Bearer ${CONFIG.r9key()}` } });
+  const body = (await res.json()) as { data?: Array<{ id: string }> };
+  const listed = new Set((body.data ?? []).map((m) => m.id));
+  reachable = true;
+
   await Promise.all(
-    wanted.map(async (id) => {
-      if (!available.has(id)) return answers.set(id, "not on the gateway");
+    [...new Set([PLAN, REVIEW, MERGE, IMPL_SMALL, IMPL_LARGE])].map(async (id) => {
+      if (!listed.has(id)) return answers.set(id, "not on the gateway");
       try {
-        const r = await fetch(`${R9_URL.replace("host.docker.internal", "localhost")}/v1/chat/completions`, {
+        const r = await fetch(`${local(CONFIG.R9_URL)}/v1/chat/completions`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${r9key()}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${CONFIG.r9key()}`, "Content-Type": "application/json" },
           body: JSON.stringify({ model: id, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
         });
-        if (!r.ok) answers.set(id, `${r.status} ${(await r.text()).replace(/\s+/g, " ").slice(0, 70)}`);
+        if (r.ok) available.add(id);
+        else answers.set(id, `${r.status} ${(await r.text()).replace(/\s+/g, " ").slice(0, 70)}`);
       } catch (e) {
         answers.set(id, (e as Error).message.slice(0, 70));
       }
     }),
   );
+} catch (e) {
+  console.error(`✗ cannot reach 9router at ${CONFIG.R9_URL} — is it running? (${(e as Error).message})`);
 }
-const usable = (id: string) => reachable && available.has(id) && !answers.has(id);
-const live = (id: string) => (usable(id) ? "answers ✓" : `✗ ${answers.get(id) ?? "MISSING"}`);
+
+const live = (id: string) => (available.has(id) ? "answers ✓" : `✗ ${answers.get(id) ?? "MISSING"}`);
 console.log("Phase          Model                      9router");
 console.log("─".repeat(62));
-console.log(`PLAN           ${PLAN.padEnd(26)} ${reachable ? live(PLAN) : "?"}`);
-console.log(`IMPL (small)   ${IMPL_SMALL.padEnd(26)} ${reachable ? live(IMPL_SMALL) : "?"}`);
-console.log(`IMPL (large)   ${IMPL_LARGE.padEnd(26)} ${reachable ? live(IMPL_LARGE) : "?"}`);
-console.log(`REVIEW         ${REVIEW.padEnd(26)} ${reachable ? live(REVIEW) : "?"}`);
-console.log(`MERGE          ${MERGE.padEnd(26)} ${reachable ? live(MERGE) : "?"}`);
+for (const [phase, id] of [["PLAN", PLAN], ["IMPL (small)", IMPL_SMALL], ["IMPL (large)", IMPL_LARGE], ["REVIEW", REVIEW], ["MERGE", MERGE]] as const)
+  console.log(`${phase.padEnd(14)} ${id.padEnd(26)} ${reachable ? live(id) : "?"}`);
 console.log("─".repeat(62));
-console.log(`9router key: ${r9key() ? "present ✓" : "MISSING ✗"}   reachable: ${reachable ? "yes ✓" : "NO ✗"}`);
+console.log(`9router key: ${CONFIG.r9key() ? "present ✓" : "MISSING ✗"}   reachable: ${reachable ? "yes ✓" : "NO ✗"}`);
 
-// The sandbox image (SANDBOX=docker only). The library derives the tag from
-// the repo dir name (lowercase, anything outside [a-z0-9_.-] → "-") and only
-// errors at the first container create — AFTER the planner already started.
-// Catch it here. SANDBOX=none runs on the host: no image, but permission
-// prompts stay live — an AFK run hangs on the first unapproved tool call.
-const SANDBOX = process.env.SANDBOX ?? "docker";
+// The sandbox image (SANDBOX=docker only). The library derives the tag from the
+// repo dir name and only errors at the first container create — after the
+// planner already spent tokens. Catch it here.
 const IMAGE = `sandcastle:${basename(process.cwd()).toLowerCase().replace(/[^a-z0-9_.-]/g, "-") || "local"}`;
 let sandboxProblem = "";
-if (SANDBOX === "docker") {
+if (CONFIG.SANDBOX === "docker") {
   try {
     execSync(`docker image inspect ${IMAGE}`, { stdio: "ignore" });
   } catch {
@@ -99,88 +74,67 @@ if (SANDBOX === "docker") {
     }
   }
   console.log(`Sandbox img: ${IMAGE} ${sandboxProblem ? "✗" : "present ✓"}`);
-} else if (SANDBOX === "none") {
-  console.log("Sandbox:     none — agents run on the host (no image; pre-allowlist permissions or a nohup run hangs)");
 } else {
-  sandboxProblem = `SANDBOX must be "docker" or "none", got "${SANDBOX}" ✗`;
-  console.log(`Sandbox:     ${sandboxProblem}`);
+  console.log("Sandbox:     none — agents run on the host (no image; pre-allowlist permissions or a nohup run hangs)");
 }
 
 // GH_TOKEN vs THIS repo. A fine-grained PAT is scoped per-repo: one minted for
 // another project authenticates fine but 404s here — and that surfaces as
-// "Could not resolve to a Repository" deep inside the planner's first gh call,
-// not at startup. Ask the API up front.
+// "Could not resolve to a Repository" deep inside the planner's first gh call.
 // ponytail: repo parse breaks on dots in repo names; none of ours have them.
 let ghProblem = "";
-let ghRepo = "";
-const ISSUE_SOURCE = process.env.ISSUE_SOURCE ?? "github";
-if (ISSUE_SOURCE === "github" && process.env.GH_TOKEN) {
-  try {
-    const url = execSync("git remote get-url origin", { encoding: "utf8" }).trim();
-    ghRepo = url.match(/github\.com[:/]([^/]+\/[^/.]+)/)?.[1] ?? "";
-    if (ghRepo) execSync(`gh api repos/${ghRepo}`, { stdio: "ignore" });
-  } catch {
-    ghProblem = `can't see ${ghRepo} ✗ — grant this repo to the fine-grained PAT (or mint one: Issues R/W + Metadata R)`;
-  }
-}
-if (ISSUE_SOURCE === "github") {
-  console.log(`GH token:    ${process.env.GH_TOKEN ? ghProblem || `sees ${ghRepo} ✓` : "not set — gh keychain auth"}`);
-} else if (ISSUE_SOURCE === "local") {
-  // Local mode never touches GitHub — the count is the only thing worth knowing.
-  const n = (() => {
+if (CONFIG.ISSUE_SOURCE === "github") {
+  let ghRepo = "";
+  if (process.env.GH_TOKEN) {
     try {
-      return readdirSync(join(process.cwd(), ".sandcastle", "issues")).filter((f) => f.endsWith(".md")).length;
+      ghRepo = execSync("git remote get-url origin", { encoding: "utf8" }).trim().match(/github\.com[:/]([^/]+\/[^/.]+)/)?.[1] ?? "";
+      if (ghRepo) execSync(`gh api repos/${ghRepo}`, { stdio: "ignore" });
     } catch {
-      return 0;
+      ghProblem = `can't see ${ghRepo} ✗ — grant this repo to the fine-grained PAT (or mint one: Issues R/W + Metadata R)`;
     }
+  }
+  console.log(`GH token:    ${process.env.GH_TOKEN ? ghProblem || `sees ${ghRepo} ✓` : "not set — gh keychain auth"}`);
+} else {
+  const n = (() => {
+    try { return readdirSync(join(process.cwd(), ".sandcastle", "issues")).filter((f) => f.endsWith(".md")).length; }
+    catch { return 0; }
   })();
   console.log(`Issues:      local — ${n} open file(s) in .sandcastle/issues/${n === 0 ? " ⚠ planner will find nothing to do" : ""}`);
-} else {
-  ghProblem = `ISSUE_SOURCE must be "github" or "local", got "${ISSUE_SOURCE}" ✗`;
-  console.log(`Issues:      ${ghProblem}`);
 }
 
 // Prompt wiring: the library HARD-FAILS a run when a prompt references a
-// {{PLACEHOLDER}} that main.mts never passes ("Prompt argument … has no
-// matching value"), and that throw lands deep inside the per-issue retry, where
-// it reads as a model failure. Catch it here in 10ms instead.
+// {{PLACEHOLDER}} main.mts never passes, and that throw lands deep inside the
+// per-issue retry where it reads as a model failure. Catch it in 10ms instead.
 // ponytail: matches the name anywhere in main.mts, not against the specific
-// call site — so a name used by one prompt and added to a second still reads as
-// wired. Catches "never wired at all", which is the bug that actually happens.
-// SOURCE_BRANCH/TARGET_BRANCH are supplied by the library itself; passing them
-// is an error, so they are legitimately absent from main.mts.
+// call site — catches "never wired at all", which is the bug that happens.
+// SOURCE_BRANCH/TARGET_BRANCH are supplied by the library; passing them is an
+// error, so they are legitimately absent from main.mts.
 const BUILT_IN = new Set(["SOURCE_BRANCH", "TARGET_BRANCH"]);
 const here = join(process.cwd(), ".sandcastle");
 const mainSrc = readFileSync(join(here, "main.mts"), "utf8");
 const unwired: string[] = [];
 for (const file of ["plan-prompt.md", "implement-prompt.md", "review-prompt.md", "merge-prompt.md"]) {
-  const names = new Set(
-    [...readFileSync(join(here, file), "utf8").matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map((m) => m[1]!),
-  );
-  for (const name of names) {
-    if (BUILT_IN.has(name)) continue;
-    if (!new RegExp(`\\b${name}\\b`).test(mainSrc)) unwired.push(`${file}: {{${name}}}`);
+  for (const m of readFileSync(join(here, file), "utf8").matchAll(/\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)) {
+    const name = m[1]!;
+    if (!BUILT_IN.has(name) && !new RegExp(`\\b${name}\\b`).test(mainSrc)) unwired.push(`${file}: {{${name}}}`);
   }
 }
-console.log(`Prompt args: ${unwired.length === 0 ? "all wired ✓" : `UNWIRED ✗ — ${unwired.join(", ")}`}`);
+console.log(`Prompt args: ${unwired.length === 0 ? "all wired ✓" : `UNWIRED ✗ — ${[...new Set(unwired)].join(", ")}`}`);
 
-// The inverse mistake, and the more expensive one: passing a built-in is a hard
-// PromptError at run time, on every phase, however sensible it looks in a diff.
-const overridden = [...mainSrc.matchAll(/^\s*(SOURCE_BRANCH|TARGET_BRANCH)\s*[,:]/gm)].map((m) => m[1]!);
-console.log(`Built-ins:   ${overridden.length === 0 ? "not overridden ✓" : `PASSED BY main.mts ✗ — ${[...new Set(overridden)].join(", ")}`}`);
+const overridden = [...new Set([...mainSrc.matchAll(/^\s*(SOURCE_BRANCH|TARGET_BRANCH)\s*[,:]/gm)].map((m) => m[1]!))];
+console.log(`Built-ins:   ${overridden.length === 0 ? "not overridden ✓" : `PASSED BY main.mts ✗ — ${overridden.join(", ")}`}`);
 
-// Same rule main.mts enforces at run time, so this CLI can't disagree with the
-// loop it is meant to predict: plan/review/merge have no fallback and must be
-// live; the two IMPL tiers fall back to each other, so one being offline is a
-// warning and only losing both is fatal.
-const coreMissing = [...new Set([PLAN, REVIEW, MERGE])].filter((m) => !usable(m));
-const implLive = [IMPL_SMALL, IMPL_LARGE].filter((m) => usable(m));
-if (unwired.length) { console.error(`FAIL: prompt placeholders never passed by main.mts: ${unwired.join(", ")}`); process.exit(1); }
-if (overridden.length) { console.error(`FAIL: built-in prompt args passed by main.mts: ${[...new Set(overridden)].join(", ")} — the library supplies these; passing one throws.`); process.exit(1); }
-if (!reachable || !r9key()) { console.error("FAIL: 9router unreachable or no key"); process.exit(1); }
-if (sandboxProblem) { console.error(`FAIL: sandbox — ${sandboxProblem}`); process.exit(1); }
-if (ghProblem) { console.error(`FAIL: issues — ${ghProblem}`); process.exit(1); }
-if (coreMissing.length) { console.error(`FAIL: plan/review/merge models not on 9router (no fallback for those): ${coreMissing.join(", ")}`); process.exit(1); }
-if (implLive.length === 0) { console.error(`FAIL: both implementer models are offline: ${IMPL_SMALL}, ${IMPL_LARGE}`); process.exit(1); }
-if (implLive.length === 1) { console.warn(`⚠ one implementer tier is offline — all IMPL work will run on ${implLive[0]}`); }
+// Same verdict function the loop runs, so this CLI cannot predict something the
+// loop won't do.
+const verdict = reachable ? livenessVerdict(available, { plan: PLAN, review: REVIEW, merge: MERGE, small: IMPL_SMALL, large: IMPL_LARGE }) : null;
+for (const w of verdict?.warnings ?? []) console.warn(`⚠ ${w}`);
+
+const fail = (msg: string) => { console.error(`FAIL: ${msg}`); process.exit(1); };
+for (const p of configProblems()) fail(p);
+if (unwired.length) fail(`prompt placeholders never passed by main.mts: ${[...new Set(unwired)].join(", ")}`);
+if (overridden.length) fail(`built-in prompt args passed by main.mts: ${overridden.join(", ")} — the library supplies these; passing one throws.`);
+if (!reachable || !CONFIG.r9key()) fail("9router unreachable or no key");
+if (sandboxProblem) fail(`sandbox — ${sandboxProblem}`);
+if (ghProblem) fail(`GH_TOKEN ${ghProblem}`);
+for (const f of verdict?.fatal ?? []) fail(f + ` (answering: ${[...available].sort().join(", ") || "none"})`);
 console.log("OK — ready to run");

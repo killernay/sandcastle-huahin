@@ -10,10 +10,12 @@
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { CONFIG } from "./config.mts";
+import { isDirtyWorktree } from "./decisions.mts";
 
 // Minutes without a single byte of new output before we call it stalled. Agents
 // think for a long time between tool calls; 20 is quiet even for a slow one.
-const STALL_MIN = Number(process.env.SANDCASTLE_STALL_MIN ?? 20);
+const STALL_MIN = CONFIG.SANDCASTLE_STALL_MIN;
 
 const root = process.cwd();
 const logDir = join(root, ".sandcastle", "logs");
@@ -45,7 +47,13 @@ if (runCount > 1) problems.push(`${runCount} loops running host-wide — if more
 
 const log = (() => {
   try {
-    return readFileSync(runLog, "utf8").replace(/\x1b\[[0-9;]*m/g, "");
+    // Only the CURRENT run's output. Two launches share run.log — the second
+    // truncates it while the first keeps writing at its old offset — so a
+    // crashed sibling's "✗ … failed" lines linger and read as live failures.
+    // Every run opens with "Preflight OK"; start from the last one.
+    const raw = readFileSync(runLog, "utf8").replace(/\x1b\[[0-9;]*m/g, "");
+    const start = raw.lastIndexOf("Preflight OK");
+    return start === -1 ? raw : raw.slice(start);
   } catch {
     console.log("no .sandcastle/run.log — nothing has run in this repo yet");
     process.exit(runCount > 1 ? 1 : 0);
@@ -106,11 +114,10 @@ if (runCount === 0 && containers > 0) problems.push(`${containers} sandcastle co
 // from a dead run is a problem, and the next start will refuse to run anyway.
 if (runCount === 0) {
   try {
-    // Same rule as main.mts: agent runtime droppings under .claude/ don't count.
+    // The predicate is the loop's own (decisions.mts), so this report cannot
+    // disagree with what the next start will actually do.
     const dirty = readdirSync(join(root, ".sandcastle", "worktrees")).filter((n) =>
-      sh(`git -C .sandcastle/worktrees/${n} status --porcelain`)
-        .split("\n")
-        .some((l) => l.trim() !== "" && !/^\?\?\s+\.claude\//.test(l)),
+      isDirtyWorktree(sh(`git -C .sandcastle/worktrees/${n} status --porcelain`)),
     );
     if (dirty.length > 0) problems.push(`worktree(s) left dirty by a stopped run: ${dirty.join(", ")} — the next start auto-rescues them (WIP commit on the issue branch, then clears)`);
   } catch {}

@@ -133,6 +133,28 @@ so an empty list right after stopping is expected, not a sign the run never
 started. The `sandcastle:<repo>` image (~2 GB) is built once and reused; leave it
 unless you want the next run to rebuild from the `Dockerfile`.
 
+## How the harness is put together
+
+Five scripts, two shared modules:
+
+| File | What it is |
+| --- | --- |
+| `config.mts` | Every knob — name, default, docs — in one table, plus the .env parser and the cross-knob rules. The other scripts import it; none of them names a default itself. |
+| `decisions.mts` | The rules, as pure functions over plain values: the implementer fallback chain, the model-liveness verdict, what counts as a dirty worktree, which tiers earn a review. No I/O, so it is testable in milliseconds. |
+| `main.mts` | The loop — effects only: containers, git, network, prompts. |
+| `check-models.mts` | Preflight. Shares `decisions.mts` with the loop, so it cannot predict something the loop won't do. |
+| `watch.mts` · `ui.mts` | Health verdict and the web monitor. |
+
+```bash
+npx tsx --test .sandcastle/*.test.mts    # 16 checks, no Docker, no gateway, ~200ms
+npx tsx .sandcastle/config.mts           # print the resolved config
+```
+
+The tests cover the rules *and* the documentation: adding a knob without
+documenting it fails, and so does documenting a variable the code never reads.
+That second check is not hypothetical — a retired implementer variable sat in
+the routing guide for months, and setting it did nothing at all.
+
 ## Configuration (`.sandcastle/.env`)
 
 | Var | What | Default |
