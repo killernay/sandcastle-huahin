@@ -100,12 +100,12 @@ const r9key = () => {
 };
 
 // ── Model routing (all via 9router, prefix required: cc/… ag/… kimi/…) ───────
-// PLAN: Claude Fable (reasoning). REVIEW / MERGE: Claude Opus (QC). IMPL: picked by the
+// PLAN / REVIEW / MERGE: Claude Opus (reasoning + QC). IMPL: picked by the
 // planner's per-issue difficulty — small/easy → agy (Gemini), large/hard →
 // Kimi K3. Override any via env: MODEL_PLAN, MODEL_REVIEW, MODEL_MERGE,
 // MODEL_IMPL_SMALL, MODEL_IMPL_LARGE.
 const modelFor = (role: "PLAN" | "REVIEW" | "MERGE") =>
-  process.env[`MODEL_${role}`] ?? (role === "PLAN" ? "cc/claude-fable-5" : "cc/claude-opus-5");
+  process.env[`MODEL_${role}`] ?? "cc/claude-opus-5";
 const IMPL_SMALL = process.env.MODEL_IMPL_SMALL ?? "ag/gemini-3.1-pro-low";
 const IMPL_LARGE = process.env.MODEL_IMPL_LARGE ?? "kimi/kimi-k3";
 
@@ -698,6 +698,20 @@ for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
   });
 
   console.log("\nBranches merged.");
+
+  // Publish the round's work. Deliberately host-side deterministic code, not a
+  // line in merge-prompt.md: pushing is a fixed action with real consequences,
+  // and the sandbox has no push credentials anyway (the host's do). Opt-in —
+  // an AFK loop that pushes unattended is a choice, not a default. Never fatal:
+  // a rejected push (someone else moved the branch) must not kill a healthy run.
+  if (/^(1|true|yes)$/i.test(process.env.AUTO_PUSH ?? "")) {
+    try {
+      execSync("git push", { encoding: "utf8", stdio: "pipe" });
+      console.log("Pushed to remote.");
+    } catch (e) {
+      console.log(`⚠ push failed (work is safe in local git): ${String((e as { stderr?: Buffer }).stderr ?? e).replace(/\s+/g, " ").slice(0, 160)}`);
+    }
+  }
 }
 
 console.log("\nAll done.");

@@ -143,15 +143,59 @@ unless you want the next run to rebuild from the `Dockerfile`.
 | `BATCH_SIZE` | Issues the planner may take per round (parallelism) | `3` |
 | `INSTALL_CMD` | What the sandbox runs to make the repo buildable | pnpm install |
 | `RATE_LIMIT_WAIT_S` | Pause before retrying an issue whose models were all rate-limited | `90` |
+| `AUTO_PUSH` | `true` = push `main` after each merge round (host credentials; failure is logged, never fatal) | off |
 | `GH_TOKEN` | GitHub token (Issues R/W + Metadata R) | — |
 | `SANDBOX` | `docker` = isolated image; `none` = on the host — no isolation, and permission prompts stay live (pre-allowlist in `.claude/settings.json` or an AFK run hangs) | `docker` |
 | `ISSUE_SOURCE` | `github` = open issues by `ISSUE_LABEL`; `local` = files in `.sandcastle/issues/` — no GitHub or `GH_TOKEN` needed | `github` |
-| `MODEL_PLAN` | Planner (reasoning) model | `cc/claude-fable-5` |
-| `MODEL_REVIEW/MERGE` | QC models | `cc/claude-opus-5` |
+| `MODEL_PLAN/REVIEW/MERGE` | Reasoning + QC models | `cc/claude-opus-5` |
 | `MODEL_IMPL_SMALL` | Fast model for easy issues | `ag/gemini-3.1-pro-low` |
 | `MODEL_IMPL_LARGE` | Strong model for hard issues | `kimi/kimi-k3` |
 
 See `.sandcastle/MODELS.md` for the full routing guide.
+
+### Point each phase at a 9router *combo*, not a model
+
+A single model id in `MODEL_*` makes that phase a single point of failure: the
+provider hits its rate limit at 3am and the phase with no fallback — merge is
+the usual victim — takes the whole loop down with it. The harness only falls
+back between the two implementer tiers; plan, review and merge have none.
+
+Fix it at the gateway instead. A 9router **combo** is a virtual model that
+holds an ordered list of real ones; the gateway walks the list per call, so a
+provider that is rate-limited *right now* costs one hop instead of a run:
+
+```
+dashboard → Combos → New → mode: "Fallback — try in order"
+
+plan         cc/claude-opus-5 → cx/gpt-5.6-sol
+impl-small   cx/gpt-5.3-codex-spark → kimi/kimi-k2.7-code → ag/gemini-3-flash
+impl-large   cx/gpt-5.6-sol → cc/claude-opus-5 → kimi/kimi-k3
+opus         cc/claude-opus-5 → cx/gpt-5.6-sol-review        # the review seat
+merge        cc/claude-opus-5 → cx/gpt-5.6-terra
+```
+
+Then `.env` names combos, never models:
+
+```bash
+MODEL_PLAN=plan
+MODEL_IMPL_SMALL=impl-small
+MODEL_IMPL_LARGE=impl-large
+MODEL_REVIEW=opus
+MODEL_MERGE=merge
+```
+
+What this buys, beyond surviving a quota wall: changing the mix is a dashboard
+edit that takes effect on the next call — no `.env`, no restart, not even a
+pause in a running loop. Order the list by what each seat needs — first place
+by skill, last place by *availability* (a provider that 429s under load is a
+poor first choice and a fine last one).
+
+Two things stay true. `check-models.mts` probes a combo exactly like a model,
+so a combo you renamed or deleted is caught before the run, not during it. And
+the harness's own small↔large fallback still sits underneath as a second net.
+
+In the monitor, issue cards show the combo name; the 9router panel below shows
+which real model actually served each call.
 
 ## Local issues — run without GitHub
 
@@ -338,7 +382,7 @@ with a consistent label works. The skills just make the planning half pleasant.
 preflight (check models live on 9router)
   └─ for each iteration (max 10):
        planner   → reads open {{ISSUE_LABEL}} issues + dep-order → picks ≤3,
-                   tags each small/large           [cc/claude-fable-5]
+                   tags each small/large           [cc/claude-opus-5]
        for each issue in parallel:
          implementer → writes code, commits        [agy | kimi, by size]
          reviewer    → QC, may add commits          [cc/claude-opus-5]

@@ -8,7 +8,7 @@ that phase through the local 9router gateway instead.
 
 | Var            | Phase        | Default (unset)   |
 | -------------- | ------------ | ----------------- |
-| `MODEL_PLAN`   | planner      | claude-fable-5  |
+| `MODEL_PLAN`   | planner      | claude-opus-5   |
 | `MODEL_IMPL`   | implementer  | claude-opus-5   |
 | `MODEL_REVIEW` | reviewer     | claude-opus-5   |
 | `MODEL_MERGE`  | merger       | claude-opus-5   |
@@ -22,7 +22,26 @@ An id with `/` (`kimi/kimi-k2.7-code`, `ag/gemini-3.1-pro-low`, `cc/claude-opus-
 
 - kimi:   `kimi/kimi-k2.7-code`, `kimi/kimi-k2.5-thinking`, `kimi/kimi-k3`
 - gemini: `ag/gemini-3.1-pro-low`, `ag/gemini-pro-agent`, `ag/gemini-3-flash`
-- claude: `cc/claude-fable-5`, `cc/claude-opus-5`, `cc/claude-sonnet-5`, `ag/claude-opus-4-6-thinking`
+- claude: `cc/claude-opus-5`, `cc/claude-sonnet-5`, `ag/claude-opus-4-6-thinking`
+
+## Combos — one id, an ordered list of models
+
+9router lets you define a **combo**: a virtual model holding real ones in
+order, tried per call. Point `MODEL_*` at combos and no phase is ever a single
+point of failure — a rate-limited provider costs one hop, not the run. This is
+the recommended setup; see the README's "Point each phase at a 9router combo"
+for the concrete lists and the reasoning.
+
+```bash
+MODEL_PLAN=plan          # combo: opus → sol
+MODEL_REVIEW=opus        # combo: opus → sol-review
+MODEL_MERGE=merge        # combo: opus → terra
+MODEL_IMPL_SMALL=impl-small
+MODEL_IMPL_LARGE=impl-large
+```
+
+Combos are edited in the 9router dashboard and take effect on the next call —
+no `.env` edit, no restart. `check-models.mts` probes them like any other id.
 
 ## Recipes
 

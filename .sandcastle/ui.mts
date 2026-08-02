@@ -36,7 +36,7 @@ for (const line of (() => {
   }
 }
 const MODELS = {
-  planner: process.env.MODEL_PLAN ?? "cc/claude-fable-5",
+  planner: process.env.MODEL_PLAN ?? "cc/claude-opus-5",
   reviewer: process.env.MODEL_REVIEW ?? "cc/claude-opus-5",
   merger: process.env.MODEL_MERGE ?? "cc/claude-opus-5",
 };
